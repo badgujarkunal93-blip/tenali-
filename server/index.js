@@ -2876,6 +2876,85 @@ function pick(arr) {
 }
 
 /**
+ * Half-up rounding that is robust to IEEE-754 representation errors.
+ *
+ * Native JS toFixed/toPrecision can mis-round numbers like 6.835 (returns
+ * "6.83" because the underlying double is 6.8349999...). Standard "round half
+ * up" rounding requires that when the digit being dropped is 5–9 the previous
+ * digit increments by 1, regardless of the parity of the preceding digit.
+ *
+ * Algorithm: walk the decimal *string* of the value (so we never re-enter
+ * floating-point arithmetic mid-rounding) and apply a textual increment-with-
+ * carry when the first dropped digit is >= 5.
+ *
+ * Supports negative dp (round to nearest 10^|dp|) so the same routine can be
+ * reused for significant-figure rounding.
+ *
+ * @param {number} value  The value to round.
+ * @param {number} dp     Decimal places (negative allowed for tens/hundreds).
+ * @returns {number}      Rounded value.
+ */
+function roundHalfUp(value, dp = 0) {
+  if (!isFinite(value) || value === 0) return value;
+  const negative = value < 0;
+  let s = Math.abs(value).toString();
+  if (/e/i.test(s)) {
+    // Expand scientific notation to a plain decimal with extra precision
+    s = Math.abs(value).toFixed(Math.max(20, dp + 5));
+  }
+  let [intStr, decStr = ''] = s.split('.');
+  if (dp >= 0) {
+    if (decStr.length <= dp) {
+      return negative ? -parseFloat(s) : parseFloat(s);
+    }
+    const keep = intStr + decStr.slice(0, dp);
+    const checkDigit = parseInt(decStr[dp], 10);
+    let resultDigits;
+    if (checkDigit >= 5) {
+      const incremented = (BigInt(keep) + 1n).toString();
+      resultDigits = incremented.length >= keep.length
+        ? incremented
+        : incremented.padStart(keep.length, '0');
+    } else {
+      resultDigits = keep;
+    }
+    let resInt, resDec;
+    if (dp === 0) {
+      resInt = resultDigits;
+      resDec = '';
+    } else {
+      resInt = resultDigits.slice(0, resultDigits.length - dp);
+      resDec = resultDigits.slice(resultDigits.length - dp);
+      if (resInt === '') resInt = '0';
+    }
+    return parseFloat((negative ? '-' : '') + resInt + (resDec ? '.' + resDec : ''));
+  } else {
+    const removeCount = -dp;
+    const padded = intStr.padStart(removeCount + 1, '0');
+    const keep = padded.slice(0, padded.length - removeCount);
+    const dropFirst = padded[padded.length - removeCount];
+    let resultInt;
+    if (parseInt(dropFirst, 10) >= 5) {
+      resultInt = (BigInt(keep) + 1n).toString();
+    } else {
+      resultInt = keep;
+    }
+    return parseFloat((negative ? '-' : '') + resultInt + '0'.repeat(removeCount));
+  }
+}
+
+/**
+ * Round to N significant figures using half-up rules. Reuses roundHalfUp by
+ * computing the equivalent decimal-place count from the value's magnitude.
+ */
+function roundSigFigs(value, sf) {
+  if (!isFinite(value) || value === 0) return value;
+  const mag = Math.floor(Math.log10(Math.abs(value)));
+  const dp = sf - mag - 1;
+  return roundHalfUp(value, dp);
+}
+
+/**
  * GET /surds-api/question?difficulty=easy|medium|hard|extrahard
  *
  * Easy:      Simplify √n  (e.g. √72 = 6√2)
@@ -5645,22 +5724,26 @@ app.get('/rounding-api/question', (req, res) => {
   let prompt, answer, display;
 
   if (diff === 'easy') {
-    // Round to given dp
+    // Round to given dp — use half-up via roundHalfUp() to fix the
+    // historical IEEE-754 bug where e.g. 6.835 would round to 6.83 instead
+    // of 6.84 (Module 49 spec).
     const dp = randInt(1, 2);
     const num = (randInt(100, 9999) / 1000).toFixed(4);
-    answer = parseFloat(parseFloat(num).toFixed(dp));
-    display = parseFloat(num).toFixed(dp);
+    answer = roundHalfUp(parseFloat(num), dp);
+    display = answer.toFixed(dp);
     prompt = `Round ${num} to ${dp} decimal place${dp > 1 ? 's' : ''}.`;
   } else if (diff === 'medium') {
-    // Round to N significant figures
+    // Round to N significant figures — also via half-up so that values like
+    // 0.045 → 0.05, 75 → 80 round up consistently.
     const sf = randInt(1, 3);
     const num = randInt(1000, 99999) / (Math.pow(10, randInt(0, 2)));
-    const rounded = parseFloat(num.toPrecision(sf));
+    const rounded = roundSigFigs(num, sf);
     answer = rounded;
     display = String(rounded);
     prompt = `Round ${num} to ${sf} significant figure${sf > 1 ? 's' : ''}.`;
   } else if (diff === 'hard') {
-    // Truncate (not round) to N dp
+    // Truncate (not round) to N dp — truncation is unaffected by the half-up
+    // rule, leave existing logic intact.
     const dp = randInt(1, 3);
     const num = (randInt(10000, 99999) / 10000).toFixed(5);
     const factor = Math.pow(10, dp);
@@ -5668,11 +5751,11 @@ app.get('/rounding-api/question', (req, res) => {
     display = answer.toFixed(dp);
     prompt = `Truncate ${num} to ${dp} decimal place${dp > 1 ? 's' : ''}.`;
   } else {
-    // Estimation: round each to 1 sf then compute
+    // Estimation: round each to 1 sf then compute (half-up).
     const a = randInt(10, 99);
     const b = randInt(10, 99);
-    const aRound = parseFloat(a.toPrecision(1));
-    const bRound = parseFloat(b.toPrecision(1));
+    const aRound = roundSigFigs(a, 1);
+    const bRound = roundSigFigs(b, 1);
     answer = aRound * bRound;
     display = String(answer);
     prompt = `Estimate ${a} × ${b} by rounding each number to 1 significant figure.`;
