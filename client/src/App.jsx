@@ -8226,6 +8226,66 @@ const Bridge23App = makeBridgeApp({
   nextHref: '/chapter5', nextLabel: 'On to Lesson 13',
 })
 
+// ─── Bridge 24 — Successive % Changes ─────────────────────────────────
+function generateBridge24Question() {
+  const Oq = bridge_pick([100, 200, 400, 500, 1000, 2000, 5000])
+  const Mu = bridge_randInt(1, 5)
+  const O = Oq * Mu
+  const Pp1 = bridge_pick([5, 10, 20, 25, 50])
+  const Pp2 = bridge_pick([5, 10, 15, 20, 25])
+  const dir1 = Math.random() < 0.5
+  const dir2 = Math.random() < 0.5
+  const m1 = dir1 ? (1 + Pp1 / 100) : (1 - Pp1 / 100)
+  const m2 = dir2 ? (1 + Pp2 / 100) : (1 - Pp2 / 100)
+  const N = O * m1 * m2
+  if (Math.abs(N - Math.round(N * 100) / 100) > 0.005) return generateBridge24Question()
+  const Nrounded = Math.round(N * 100) / 100
+  const opLabel = (d, p) => d ? `+${p}%` : `−${p}%`
+  const prompt = `${O} is changed ${opLabel(dir1, Pp1)} then ${opLabel(dir2, Pp2)}.   Final value?`
+  const answer = Nrounded
+  const candidates = [
+    Math.round(O * (1 + (dir1 ? Pp1 : -Pp1) / 100 + (dir2 ? Pp2 : -Pp2) / 100) * 100) / 100,  // added the percent points
+    Math.round(O * m1 * 100) / 100,                                                            // applied first only
+    Math.round(O * m2 * 100) / 100,                                                            // applied second only
+    Math.round(O + (dir1 ? 1 : -1) * Pp1 + (dir2 ? 1 : -1) * Pp2),                             // added points absolutely
+    Math.round(O - (Pp1 + Pp2)),
+    Math.round(answer + 1), Math.round(answer - 1),
+  ]
+  const { options, correctIndex } = bridge_buildOptions(answer, candidates.filter(c => typeof c === 'number' && isFinite(c) && c > 0))
+  return { prompt, options, correctIndex,
+           explanation: `Multipliers chain by multiplication, not addition.   ${m1} × ${m2} = ${Math.round(m1 * m2 * 1e6) / 1e6}.   ${O} × ${m1} × ${m2} = ${Nrounded}.` }
+}
+
+function Lesson14ProgressionStrip({ current }) {
+  const nodes = [
+    { id: 'lesson13', label: 'Lesson 13', sub: 'Reverse %',          href: '/chapter5', done: ch5LessonDone('L13') },
+    { id: 'bridge24', label: 'Bridge 24', sub: 'Successive Changes', href: '/bridge24' },
+    { id: 'lesson14', label: 'Lesson 14', sub: 'Multi-step %',       href: '/chapter5' },
+  ]
+  return renderProgressionStrip('Lesson 14 — Prerequisite Path', nodes, current)
+}
+
+const Bridge24App = makeBridgeApp({
+  id: 'bridge24', currentNode: 'bridge24', StripComponent: Lesson14ProgressionStrip,
+  title: 'Bridge 24 · Successive % Changes',
+  subtitle: 'Apply two percentage changes one after the other.',
+  intro: 'Multi-step word problems often chain percentage changes (e.g. "+22% then −22%").  The KEY rule: multipliers chain by MULTIPLICATION, not addition.   ×1.22 × 0.78 ≠ ×1.00.',
+  teach: {
+    rule: ['When changes are applied in sequence, multiply the multipliers:  final = original × m₁ × m₂ × …   Adding the percents up does NOT work — a +22% followed by a −22% leaves you about 5% LOWER, not back to the start.'],
+    example: {
+      setup: 'A $24,000 car loses 20% in year 1 and 15% in year 2.  Value after 2 years?',
+      steps: [
+        'Multipliers: 0.80 (year 1), 0.85 (year 2).',
+        '0.80 × 0.85 = 0.68.',
+        '24,000 × 0.68 = 16,320.',
+      ],
+      answer: 'Value after 2 years = $16,320.',
+    },
+  },
+  generator: generateBridge24Question,
+  nextHref: '/chapter5', nextLabel: 'On to Lesson 14',
+})
+
 function Chapter5App({ onBack }) {
   const [progress, setProgress] = useState(ch5_loadProgress)
   const [activeId, setActiveId] = useState(null)
@@ -8489,6 +8549,7 @@ function Chapter5App({ onBack }) {
         {activeId === 'L11' && <Lesson11ProgressionStrip current="lesson11" />}
         {activeId === 'L12' && <Lesson12ProgressionStrip current="lesson12" />}
         {activeId === 'L13' && <Lesson13ProgressionStrip current="lesson13" />}
+        {activeId === 'L14' && <Lesson14ProgressionStrip current="lesson14" />}
         <h2 style={{ marginBottom: 4 }}>{ch5RenderMath(lesson.title)}</h2>
         <h3 style={{ color: 'var(--clr-accent, #6cf)', marginTop: 16 }}>{lesson.teach.heading}</h3>
         {lesson.teach.body.map((para, i) => (
@@ -8532,6 +8593,7 @@ function Chapter5App({ onBack }) {
         {activeId === 'L11' && <Lesson11ProgressionStrip current="lesson11" />}
         {activeId === 'L12' && <Lesson12ProgressionStrip current="lesson12" />}
         {activeId === 'L13' && <Lesson13ProgressionStrip current="lesson13" />}
+        {activeId === 'L14' && <Lesson14ProgressionStrip current="lesson14" />}
         <h2>🎉 Lesson complete</h2>
         <p>You finished <strong>{ch5RenderMath(lesson.title)}</strong>.</p>
         {next ? (
@@ -8577,6 +8639,7 @@ function Chapter5App({ onBack }) {
       {activeId === 'L11' && <Lesson11ProgressionStrip current="lesson11" />}
       {activeId === 'L12' && <Lesson12ProgressionStrip current="lesson12" />}
       {activeId === 'L13' && <Lesson13ProgressionStrip current="lesson13" />}
+      {activeId === 'L14' && <Lesson14ProgressionStrip current="lesson14" />}
       <h3 style={{ marginBottom: 8 }}>{ch5RenderMath(lesson.title)}</h3>
       {/* Question slider — drag to jump to any question in the play sequence */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
@@ -35297,6 +35360,7 @@ function App() {
   if (pathname === '/bridge21') return (<><button className="theme-toggle" onClick={toggleTheme}>{theme === 'dark' ? '☀️' : '🌙'}</button><div className="app-shell"><div className="card"><AuthGate><Bridge21App onBack={() => { window.location.href = '/chapter5' }} /></AuthGate></div></div></>)
   if (pathname === '/bridge22') return (<><button className="theme-toggle" onClick={toggleTheme}>{theme === 'dark' ? '☀️' : '🌙'}</button><div className="app-shell"><div className="card"><AuthGate><Bridge22App onBack={() => { window.location.href = '/chapter5' }} /></AuthGate></div></div></>)
   if (pathname === '/bridge23') return (<><button className="theme-toggle" onClick={toggleTheme}>{theme === 'dark' ? '☀️' : '🌙'}</button><div className="app-shell"><div className="card"><AuthGate><Bridge23App onBack={() => { window.location.href = '/chapter5' }} /></AuthGate></div></div></>)
+  if (pathname === '/bridge24') return (<><button className="theme-toggle" onClick={toggleTheme}>{theme === 'dark' ? '☀️' : '🌙'}</button><div className="app-shell"><div className="card"><AuthGate><Bridge24App onBack={() => { window.location.href = '/chapter5' }} /></AuthGate></div></div></>)
 
   // Route: /chapter1 → Cambridge IGCSE Chapter 1 (Reviewing Number Concepts)
   if (pathname === '/chapter1') {
