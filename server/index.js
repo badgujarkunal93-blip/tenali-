@@ -67,9 +67,10 @@ app.use(express.static(clientDistPath));
 // serves; only the auth endpoints will return 503.
 const auth = require('./auth');
 app.use('/api/auth', auth.router);
+auth.seedUsers().catch(() => {});  // always populate in-memory fallback
 auth.connectMongo()
   .then(() => auth.seedUsers())
-  .catch(err => console.error('[auth] Mongo connect failed:', err.message));
+  .catch(err => console.error('[auth] Mongo connect failed — using in-memory auth:', err.message));
 
 /**
  * EXPLANATION SUPPORT MIDDLEWARE

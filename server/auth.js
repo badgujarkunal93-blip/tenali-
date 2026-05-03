@@ -49,12 +49,19 @@ const SEED_USERS = [
   { username: 'tatsavit',  password: 'taittiriya' },
 ];
 
+// In-memory fallback used when MongoDB is unavailable.
+// Keyed by lowercase username → bcrypt hash (populated at startup).
+const inMemoryUsers = {};
+
 async function seedUsers() {
   for (const u of SEED_USERS) {
+    const hash = await bcrypt.hash(u.password, 10);
+    inMemoryUsers[u.username.toLowerCase()] = hash;
+
+    if (!connected) continue;
     const existing = await User.findOne({ username: u.username.toLowerCase() });
     if (existing) continue;
-    const passwordHash = await bcrypt.hash(u.password, 10);
-    await User.create({ username: u.username.toLowerCase(), passwordHash });
+    await User.create({ username: u.username.toLowerCase(), passwordHash: hash });
     console.log(`[auth] seeded user: ${u.username}`);
   }
 }
@@ -63,7 +70,7 @@ async function seedUsers() {
 
 function signToken(user) {
   return jwt.sign(
-    { sub: user._id.toString(), username: user.username },
+    { sub: user._id ? user._id.toString() : user.username, username: user.username },
     JWT_SECRET,
     { expiresIn: JWT_TTL }
   );
@@ -87,18 +94,26 @@ function requireAuth(req, res, next) {
 const router = express.Router();
 
 router.post('/login', async (req, res) => {
-  if (!connected) return res.status(503).json({ error: 'auth backend not connected' });
   const username = String((req.body || {}).username || '').trim().toLowerCase();
   const password = String((req.body || {}).password || '');
   if (!username || !password) return res.status(400).json({ error: 'username and password are required' });
 
-  const user = await User.findOne({ username });
-  if (!user) return res.status(401).json({ error: 'invalid credentials' });
-  const ok = await bcrypt.compare(password, user.passwordHash);
-  if (!ok) return res.status(401).json({ error: 'invalid credentials' });
+  if (connected) {
+    const user = await User.findOne({ username });
+    if (!user) return res.status(401).json({ error: 'invalid credentials' });
+    const ok = await bcrypt.compare(password, user.passwordHash);
+    if (!ok) return res.status(401).json({ error: 'invalid credentials' });
+    const token = signToken(user);
+    return res.json({ token, user: { username: user.username } });
+  }
 
-  const token = signToken(user);
-  res.json({ token, user: { username: user.username } });
+  // Fallback: check against in-memory seed users when MongoDB is unavailable.
+  const hash = inMemoryUsers[username];
+  if (!hash) return res.status(401).json({ error: 'invalid credentials' });
+  const ok = await bcrypt.compare(password, hash);
+  if (!ok) return res.status(401).json({ error: 'invalid credentials' });
+  const token = signToken({ username });
+  res.json({ token, user: { username } });
 });
 
 router.get('/me', requireAuth, (req, res) => {
