@@ -8286,6 +8286,97 @@ const Bridge24App = makeBridgeApp({
   nextHref: '/chapter5', nextLabel: 'On to Lesson 14',
 })
 
+// ─── Bridge 25 — Standard Form Basics ─────────────────────────────────
+function generateBridge25Question() {
+  const direction = Math.random() < 0.5 ? 'toStd' : 'toNum'
+  if (direction === 'toStd') {
+    // ordinary → standard form
+    const aDigits = bridge_pick(['3.8', '4.2', '5.6', '7.5', '9.1', '2', '5', '6.54', '4.56', '1.03'])
+    const n = bridge_randInt(-6, 6)
+    const value = parseFloat(aDigits) * Math.pow(10, n)
+    let valueStr
+    if (Math.abs(n) < 6) valueStr = value.toString()
+    else if (n > 0) valueStr = (parseFloat(aDigits) * Math.pow(10, n)).toFixed(0)
+    else valueStr = value.toFixed(Math.abs(n) + 4).replace(/0+$/, '').replace(/\.$/, '')
+    const prompt = `Write  ${valueStr}  in standard form.`
+    const correctStr = `${aDigits}×10^${n}`
+    const answerKey = `txt:${correctStr}`
+    const dist = []
+    const tryAdd = (s) => {
+      const k = `txt:${s}`
+      if (k === answerKey || dist.find(x => x.key === k)) return
+      dist.push({ seg: [s], key: k })
+    }
+    tryAdd(`${aDigits}×10^${n + 1}`)
+    tryAdd(`${aDigits}×10^${n - 1}`)
+    tryAdd(`${aDigits}×10^${-n}`)              // wrong sign
+    tryAdd(`${parseFloat(aDigits) * 10}×10^${n - 1}`)  // a not in [1,10)
+    while (dist.length < 3) {
+      const x = `${bridge_randInt(1, 9)}×10^${bridge_randInt(-9, 9)}`
+      tryAdd(x)
+    }
+    const { options, correctIndex } = bridge_buildSegOptions([correctStr], answerKey, dist)
+    return { prompt, options, correctIndex,
+             explanation: `Move the decimal until the leading number is between 1 and 10.  Count the places.  ${valueStr} = ${correctStr}.` }
+  } else {
+    // standard form → ordinary
+    const aDigits = bridge_pick(['3.4', '5.2', '8.8', '1.05', '4', '5', '7.5', '6.5'])
+    const n = bridge_randInt(-5, 5)
+    const value = parseFloat(aDigits) * Math.pow(10, n)
+    const display = value < 0.001
+      ? value.toFixed(Math.abs(n) + 3).replace(/0+$/, '').replace(/\.$/, '')
+      : value.toString()
+    const prompt = `Convert  ${aDigits}×10^${n}  to ordinary form.`
+    const candidates = [
+      String(parseFloat(aDigits) * Math.pow(10, n + 1)),    // off-by-one
+      String(parseFloat(aDigits) * Math.pow(10, n - 1)),
+      String(parseFloat(aDigits) * Math.pow(10, -n)),       // wrong sign
+      String(parseFloat(aDigits) + n),
+    ]
+    const answerKey = `num:${display}`
+    const dist = []
+    const tryAdd = (v) => {
+      const k = `num:${v}`
+      if (k === answerKey || dist.find(x => x.key === k)) return
+      dist.push({ seg: [v], key: k })
+    }
+    candidates.forEach(c => tryAdd(c))
+    while (dist.length < 3) tryAdd(String(bridge_randInt(1, 9999) / 100))
+    const { options, correctIndex } = bridge_buildSegOptions([display], answerKey, dist)
+    return { prompt, options, correctIndex,
+             explanation: `Positive exponent → move decimal right.  Negative → move left.  ${aDigits} × 10^${n} = ${display}.` }
+  }
+}
+
+function Lesson15ProgressionStrip({ current }) {
+  const nodes = [
+    { id: 'lesson14', label: 'Lesson 14', sub: 'Multi-step %',         href: '/chapter5', done: ch5LessonDone('L14') },
+    { id: 'bridge25', label: 'Bridge 25', sub: 'Standard Form Basics', href: '/bridge25' },
+    { id: 'lesson15', label: 'Lesson 15', sub: 'Standard Form',        href: '/chapter5' },
+  ]
+  return renderProgressionStrip('Lesson 15 — Prerequisite Path', nodes, current)
+}
+
+const Bridge25App = makeBridgeApp({
+  id: 'bridge25', currentNode: 'bridge25', StripComponent: Lesson15ProgressionStrip,
+  title: 'Bridge 25 · Standard Form Basics',
+  subtitle: 'Convert numbers between ordinary form and  a × 10ⁿ.',
+  intro: 'Standard form (also called scientific notation) writes a number as  a × 10ⁿ  where  1 ≤ a < 10  and  n  is an integer.  It is the compact way of writing very large or very small numbers.',
+  teach: {
+    rule: 'For a LARGE number: count how many places you must shift the decimal LEFT to get a number between 1 and 10.  That count is positive n.   For a SMALL number: count how many places RIGHT.  That count is negative n.   To convert BACK: positive n → move decimal n places right.  Negative n → move |n| places left.',
+    example: {
+      setup: 'Write 380 in standard form.',
+      steps: [
+        'Move the decimal until you get a number between 1 and 10:  380. → 3.80.',
+        'Decimal moved 2 places LEFT, so n = +2.',
+      ],
+      answer: '380 = 3.8 × 10².',
+    },
+  },
+  generator: generateBridge25Question,
+  nextHref: '/chapter5', nextLabel: 'On to Lesson 15',
+})
+
 function Chapter5App({ onBack }) {
   const [progress, setProgress] = useState(ch5_loadProgress)
   const [activeId, setActiveId] = useState(null)
@@ -8550,6 +8641,7 @@ function Chapter5App({ onBack }) {
         {activeId === 'L12' && <Lesson12ProgressionStrip current="lesson12" />}
         {activeId === 'L13' && <Lesson13ProgressionStrip current="lesson13" />}
         {activeId === 'L14' && <Lesson14ProgressionStrip current="lesson14" />}
+        {activeId === 'L15' && <Lesson15ProgressionStrip current="lesson15" />}
         <h2 style={{ marginBottom: 4 }}>{ch5RenderMath(lesson.title)}</h2>
         <h3 style={{ color: 'var(--clr-accent, #6cf)', marginTop: 16 }}>{lesson.teach.heading}</h3>
         {lesson.teach.body.map((para, i) => (
@@ -8594,6 +8686,7 @@ function Chapter5App({ onBack }) {
         {activeId === 'L12' && <Lesson12ProgressionStrip current="lesson12" />}
         {activeId === 'L13' && <Lesson13ProgressionStrip current="lesson13" />}
         {activeId === 'L14' && <Lesson14ProgressionStrip current="lesson14" />}
+        {activeId === 'L15' && <Lesson15ProgressionStrip current="lesson15" />}
         <h2>🎉 Lesson complete</h2>
         <p>You finished <strong>{ch5RenderMath(lesson.title)}</strong>.</p>
         {next ? (
@@ -8640,6 +8733,7 @@ function Chapter5App({ onBack }) {
       {activeId === 'L12' && <Lesson12ProgressionStrip current="lesson12" />}
       {activeId === 'L13' && <Lesson13ProgressionStrip current="lesson13" />}
       {activeId === 'L14' && <Lesson14ProgressionStrip current="lesson14" />}
+      {activeId === 'L15' && <Lesson15ProgressionStrip current="lesson15" />}
       <h3 style={{ marginBottom: 8 }}>{ch5RenderMath(lesson.title)}</h3>
       {/* Question slider — drag to jump to any question in the play sequence */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
@@ -35361,6 +35455,7 @@ function App() {
   if (pathname === '/bridge22') return (<><button className="theme-toggle" onClick={toggleTheme}>{theme === 'dark' ? '☀️' : '🌙'}</button><div className="app-shell"><div className="card"><AuthGate><Bridge22App onBack={() => { window.location.href = '/chapter5' }} /></AuthGate></div></div></>)
   if (pathname === '/bridge23') return (<><button className="theme-toggle" onClick={toggleTheme}>{theme === 'dark' ? '☀️' : '🌙'}</button><div className="app-shell"><div className="card"><AuthGate><Bridge23App onBack={() => { window.location.href = '/chapter5' }} /></AuthGate></div></div></>)
   if (pathname === '/bridge24') return (<><button className="theme-toggle" onClick={toggleTheme}>{theme === 'dark' ? '☀️' : '🌙'}</button><div className="app-shell"><div className="card"><AuthGate><Bridge24App onBack={() => { window.location.href = '/chapter5' }} /></AuthGate></div></div></>)
+  if (pathname === '/bridge25') return (<><button className="theme-toggle" onClick={toggleTheme}>{theme === 'dark' ? '☀️' : '🌙'}</button><div className="app-shell"><div className="card"><AuthGate><Bridge25App onBack={() => { window.location.href = '/chapter5' }} /></AuthGate></div></div></>)
 
   // Route: /chapter1 → Cambridge IGCSE Chapter 1 (Reviewing Number Concepts)
   if (pathname === '/chapter1') {
