@@ -1,0 +1,199 @@
+.tour-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.65);
+  z-index: 9998;
+  pointer-events: auto;
+}
+
+.tour-modal {
+  position: fixed;
+  background: #ffffff;
+  border-radius: 12px;
+  width: 480px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+  color: #1a1a1a;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  transition: top 0.4s cubic-bezier(0.16, 1, 0.3, 1), left 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tour-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.tour-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.tour-title {
+  margin: 0;
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #111;
+}
+
+.tour-mute-btn {
+  background: #f5f5f5;
+  border: 1px solid #e0e0e0;
+  padding: 4px 8px;
+  border-radius: 16px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #555;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.2s;
+}
+
+.tour-mute-btn:hover {
+  background: #eee;
+}
+
+.tour-step-count {
+  font-size: 0.85rem;
+  color: #666;
+  font-weight: 500;
+}
+
+.tour-content {
+  margin-bottom: 32px;
+}
+
+.tour-message {
+  margin: 0;
+  line-height: 1.6;
+  font-size: 0.95rem;
+  color: #444;
+}
+
+.tour-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.tour-skip-btn {
+  background: none;
+  border: none;
+  color: #777;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 8px 0;
+}
+
+.tour-skip-btn:hover {
+  color: #333;
+}
+
+.tour-dots {
+  display: flex;
+  gap: 6px;
+}
+
+.tour-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ddd;
+  transition: background 0.3s;
+}
+
+.tour-dot.active {
+  background: #222;
+}
+
+.tour-controls {
+  display: flex;
+  gap: 8px;
+}
+
+.tour-btn {
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tour-btn-prev {
+  background: white;
+  border: 1px solid #ccc;
+  color: #333;
+}
+
+.tour-btn-prev:hover {
+  background: #f9f9f9;
+}
+
+.tour-btn-next {
+  background: #111;
+  border: 1px solid #111;
+  color: white;
+}
+
+.tour-btn-next:hover {
+  background: #333;
+}
+
+.tour-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.tour-highlighted {
+  position: relative !important;
+  z-index: 9999 !important;
+  box-shadow: 0 0 0 3px #d4ff29, 0 4px 20px rgba(0,0,0,0.5) !important;
+  border-radius: 8px !important;
+  background-color: var(--clr-card, #1e1e1e) !important;
+  transition: box-shadow 0.3s;
+}
+
+.tour-mockup-container {
+  margin-top: 16px;
+  background: #f8f9fa;
+  border: 1px solid #eee;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.mock-scale {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+}
+
+.mock-basket {
+  width: 40px;
+  height: 40px;
+  background: white;
+  border: 2px solid #ddd;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  color: #333;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+
+.mock-beam {
+  height: 4px;
+  width: 60px;
+  background: #ccc;
+  border-radius: 2px;
+}
