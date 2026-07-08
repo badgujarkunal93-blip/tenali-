@@ -36712,13 +36712,14 @@ function GKApp({ onBack }) {
  * @param {Object} props
  * @param {Function} props.onBack - Callback to return to home menu
  */
-function AdditionApp({ onBack }) {
+function AdditionApp({ onBack, completedTopics = [], markTopicCompleted, setTransferTopic, setMode }) {
   // Difficulty level: 'easy' (1-digit), 'medium' (2-digit), 'hard' (3-digit), 'extrahard' (4-digit)
   const [difficulty, setDifficulty] = useState('easy')
   // Adaptive mode enabled?
   const [isAdaptive, setIsAdaptive] = useState(false)
   // Adaptive score (0-3)
   const [adaptScore, setAdaptScore] = useState(0)
+
   const adaptScoreRef = useRef(0)
   // User-entered number of questions to attempt
   const [numQuestions, setNumQuestions] = useState(String(DEFAULT_TOTAL))
@@ -36749,6 +36750,15 @@ function AdditionApp({ onBack }) {
   // Timer for response timing
   const timer = useTimer()
   const advanceFnRef = useRef(null)
+
+  useEffect(() => {
+    if (finished) {
+      const pass = score / totalQ >= 0.8
+      if (pass && markTopicCompleted) {
+        markTopicCompleted('addition')
+      }
+    }
+  }, [finished, score, totalQ, markTopicCompleted])
 
   const effectiveDiff = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
   const digitMap = { easy: 1, medium: 2, hard: 3, extrahard: 4 }
@@ -36920,6 +36930,23 @@ function AdditionApp({ onBack }) {
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} placeholder={String(DEFAULT_TOTAL)} />
         </div>
         <div className="button-row"><button onClick={startQuiz}>Start Quiz</button></div>
+        {completedTopics.includes('addition') && (
+          <div className="transfer-cta-box" style={{ marginTop: '20px', padding: '16px', background: 'var(--clr-hover, rgba(255,255,255,0.03))', borderRadius: '10px', border: '1px solid var(--clr-border)', textAlign: 'center' }}>
+            <p style={{ margin: '0 0 12px', fontSize: '0.9rem', color: 'var(--clr-text-soft)', lineHeight: '1.4' }}>
+              🎉 You have completed Stage 3 Practice for this topic!
+            </p>
+            <button 
+              className="btn-transfer-cta" 
+              onClick={() => {
+                if (setTransferTopic) setTransferTopic('addition')
+                if (setMode) setMode('transfer')
+              }}
+              style={{ width: '100%', padding: '10px', background: 'linear-gradient(135deg, #FFD700, #FFA500)', color: '#000', fontWeight: 'bold', border: 'none', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+            >
+              🚀 Start Transfer Challenge (Stage 4) 🥇
+            </button>
+          </div>
+        )}
       </div>}
       {started && !finished && <>
         <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.3rem' }}>
