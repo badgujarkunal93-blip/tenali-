@@ -23,6 +23,7 @@
 
 import { useEffect, useState, useRef, useMemo } from 'react'
 import './App.css'
+import InteractiveLcmHcfApp from './LcmHcfApp'
 
 // API base URL from environment variables (Vite)
 const API = import.meta.env.VITE_API_BASE_URL || '';
@@ -36008,7 +36009,7 @@ function App() {
     bounds: BoundsApp,             // Bounds
     sdt: SDTApp,                   // Speed, Distance, Time
     variation: VariationApp,       // Variation
-    hcflcm: HcfLcmApp,            // HCF & LCM
+    hcflcm: InteractiveLcmHcfApp,  // HCF & LCM
     profitloss: ProfitLossApp,     // Profit & Loss
     rounding: RoundingApp,         // Rounding
     binomial: BinomialApp,         // Binomial Theorem
