@@ -293,60 +293,88 @@ function useAutoAdvance(revealed, advanceFnRef, isCorrect) {
 }
 
 /**
+ * Speed-run time limits per difficulty level (seconds).
+ * Easy: 8s | Medium: 12s | Hard: 20s | Extra Hard: 30s | Adaptive: 15s
+ */
+function getSpeedRunLimit(difficulty, isAdaptive) {
+  if (isAdaptive) return 10
+  const limits = { easy: 5, medium: 10, hard: 15, extrahard: 20 }
+  return limits[difficulty] ?? 10
+}
+
+/**
  * useTimer Hook
- * Tracks elapsed time for a quiz question. Maintains start time and running interval.
- * Provides methods to start, stop, and reset the timer.
+ * Supports three modes driven by the sessionGoal:
+ *   'speed'    — countdown from limitSeconds → 0; fires onTimeout when it hits 0
+ *   'perfect'  — hidden (elapsed kept internally but not shown by QuizLayout)
+ *   other      — count-up stopwatch (original behaviour)
  *
- * @returns {{elapsed: number, start: Function, stop: Function, reset: Function}}
- *   - elapsed: Current elapsed seconds (updated every 250ms)
- *   - start(): Initialize timer and begin counting
- *   - stop(): Stop timer and return total elapsed seconds
- *   - reset(): Clear timer and set elapsed to 0
+ * start(goal?, onTimeout?, limitSeconds?)
+ *   goal        — 'speed' | 'perfect' | 'standard' | 'revision'
+ *   onTimeout   — async function called when countdown reaches 0 (speed only)
+ *   limitSeconds — total seconds for countdown (speed only)
+ *
+ * @returns {{ elapsed, remaining, mode, start, stop, reset }}
+ *   elapsed   — seconds since start (count-up value; also used for timeTaken)
+ *   remaining — seconds left (countdown; only meaningful in speed mode)
+ *   mode      — current goal mode string
+ *   start / stop / reset — control methods
  */
 function useTimer() {
-  // Current elapsed time in seconds, displayed to user
-  const [elapsed, setElapsed] = useState(0)
-  // Reference to the timestamp when timer started (using Date.now())
-  const startRef = useRef(Date.now())
-  // Reference to the setInterval ID for cleanup
+  const [elapsed, setElapsed]     = useState(0)
+  const [remaining, setRemaining] = useState(0)
+  const [mode, setMode]           = useState('standard')
+  const startRef    = useRef(Date.now())
   const intervalRef = useRef(null)
+  const limitRef    = useRef(0)
+  const onTORef     = useRef(null) // timeout callback ref (avoids stale closure)
+  const firedRef    = useRef(false) // prevent double-fire
 
   /**
-   * start(): Initialize and begin the timer
-   * Records the current time, resets elapsed to 0, and starts interval updates
+   * start(goal, onTimeout, limitSeconds)
+   * Backward-compatible: calling with no args still starts a count-up timer.
    */
-  const start = () => {
-    startRef.current = Date.now()
-    setElapsed(0)
+  const start = (goal = 'standard', onTimeout = null, limitSeconds = 15) => {
     clearInterval(intervalRef.current)
-    // Update displayed elapsed time every 250ms (4x per second for smooth UI)
+    startRef.current = Date.now()
+    limitRef.current = limitSeconds
+    onTORef.current  = onTimeout
+    firedRef.current = false
+    setMode(goal)
+    setElapsed(0)
+    setRemaining(goal === 'speed' ? limitSeconds : 0)
+
     intervalRef.current = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startRef.current) / 1000))
+      const secs = Math.floor((Date.now() - startRef.current) / 1000)
+      setElapsed(secs)
+      if (goal === 'speed') {
+        const left = Math.max(0, limitRef.current - secs)
+        setRemaining(left)
+        if (left === 0 && !firedRef.current) {
+          firedRef.current = true
+          clearInterval(intervalRef.current)
+          if (typeof onTORef.current === 'function') onTORef.current()
+        }
+      }
     }, 250)
   }
 
-  /**
-   * stop(): Halt the timer and return the total elapsed time
-   * Does NOT reset state; caller typically uses the returned value to record answer time
-   */
   const stop = () => {
     clearInterval(intervalRef.current)
+    firedRef.current = true // prevent timeout after manual stop
     return Math.floor((Date.now() - startRef.current) / 1000)
   }
 
-  /**
-   * reset(): Stop interval and clear elapsed time to 0
-   * Used when finishing a quiz (stop timer and prepare for cleanup)
-   */
   const reset = () => {
     clearInterval(intervalRef.current)
+    firedRef.current = true
     setElapsed(0)
+    setRemaining(0)
   }
 
-  // Cleanup: ensure interval is cleared when component unmounts
   useEffect(() => () => clearInterval(intervalRef.current), [])
 
-  return { elapsed, start, stop, reset }
+  return { elapsed, remaining, mode, start, stop, reset }
 }
 
 /**
@@ -36317,6 +36345,7 @@ function GKApp({ onBack }) {
   const [started, setStarted] = useState(false)
   // Quiz finished flag
   const [finished, setFinished] = useState(false)
+  const [sessionGoal, setSessionGoal] = useState('standard')
   // Timer for tracking response time per question
   const timer = useTimer()
 
@@ -36325,7 +36354,27 @@ function GKApp({ onBack }) {
    * Excludes previously seen questions to avoid repetition (persisted in localStorage)
    * Stops if total questions reached
    */
-  const loadQuestion = async (excludeIds) => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/gk-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const loadQuestion = async (excludeIds) => {
     if (questionNumber >= totalQ) {
       setFinished(true)
       timer.reset()
@@ -36347,7 +36396,7 @@ function GKApp({ onBack }) {
     saveGKSeen(newSeen)
     setQuestionNumber((n) => n + 1)
     setLoading(false)
-    timer.start()
+    timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
   }
 
   /**
@@ -36382,18 +36431,22 @@ function GKApp({ onBack }) {
     const timeTaken = timer.stop()
     setSelected(option)
     // POST to backend API to check the answer
-    const res = await fetch(`${API}/gk-api/check`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: question.id, answerOption: option }),
-    })
+    const res = await fetch(`${API}/gk-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  id: question.id, answerOption: option, sessionGoal }) })
     const data = await res.json()
     setIsCorrect(data.correct)
     if (data.correct) setScore((s) => s + 1)
     // Show feedback with explanation
-    setFeedback(data.correct
-      ? `Correct! The answer is ${data.correctAnswer}) ${data.correctAnswerText}`
-      : `Incorrect. The correct answer is ${data.correctAnswer}) ${data.correctAnswerText}`)
+    (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! The answer is ${data.correctAnswer}) ${data.correctAnswerText}`.slice(0,-1) + _ci + `Correct! The answer is ${data.correctAnswer}) ${data.correctAnswerText}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. The correct answer is ${data.correctAnswer}) ${data.correctAnswerText}` + ' ❌ Perfect Solve ended.')
+          setFinished(true); timer.reset()
+        } else {
+          setFeedback(`Incorrect. The correct answer is ${data.correctAnswer}) ${data.correctAnswerText}`)
+        }
+      })()
     // Record result for display
     setResults((prev) => [...prev, {
       question: question.question.length > 50 ? question.question.slice(0, 50) + '…' : question.question,
@@ -36424,11 +36477,7 @@ function GKApp({ onBack }) {
     if (revealed) return
     const timeTaken = timer.stop()
     // POST to backend API with solve flag to get the solution
-    const res = await fetch(`${API}/gk-api/check`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: question.id, answerOption: '', solve: true }),
-    })
+    const res = await fetch(`${API}/gk-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  id: question.id, answerOption: '', solve: true, sessionGoal }) })
     const data = await res.json()
     setIsCorrect(false)
     const display = data.correctAnswer || ''
@@ -36476,9 +36525,47 @@ function GKApp({ onBack }) {
   }, [revealed, loading, question])
 
   return (
-    <QuizLayout title="General Knowledge" subtitle="Random question picker" onBack={onBack} timer={started && !finished ? timer : null}>
+    <QuizLayout title="General Knowledge" subtitle="Random question picker" onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
       {!started && !finished && <div className="welcome-box">
         <p className="welcome-text">Test your general knowledge with random questions!</p>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="gkapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} />
@@ -36562,28 +36649,49 @@ function AdditionApp({ onBack }) {
   const [revealed, setRevealed] = useState(false)
   // Results array for display
   const [results, setResults] = useState([])
+  const [sessionGoal, setSessionGoal] = useState('standard')
   // Timer for response timing
   const timer = useTimer()
   const advanceFnRef = useRef(null)
 
-  const effectiveDiff = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
+  const effectiveDiff = () => (isAdaptive) ? adaptiveLevel(adaptScoreRef.current) : difficulty
   const digitMap = { easy: 1, medium: 2, hard: 3, extrahard: 4 }
 
   /**
    * fetchQuestion(selectedDifficulty?): Fetch next addition question from API
    * Generates random a + b = ? with specified digit count
    */
-  const fetchQuestion = async (selectedDifficulty = difficulty) => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/addition-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const fetchQuestion = async (selectedDifficulty = difficulty) => {
     setLoading(true)
     setFeedback('')
     setAnswer('')
     setRevealed(false)
     setIsCorrect(null)
-    const res = await fetch(`${API}/addition-api/question?digits=${digitMap[effectiveDiff()]}`)
+    const res = await fetch(`${API}/addition-api/question?digits=${digitMap[effectiveDiff()]}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
     const data = await res.json()
     setQuestion(data)
     setLoading(false)
-    timer.start()
+    timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
   }
 
   /**
@@ -36639,32 +36747,49 @@ function AdditionApp({ onBack }) {
     if (!revealed) {
       if (answer === '') return
       const timeTaken = timer.stop()
-      const res = await fetch(`${API}/addition-api/check`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ a: question.a, b: question.b, answer: Number(answer) }),
-      })
-      const data = await res.json()
-      setIsCorrect(data.correct)
-      const newScore = score + (data.correct ? 1 : 0)
-      setScore(newScore)
-      const reasoning = `${question.a} + ${question.b} = ${data.correctAnswer}`
-      setFeedback(data.correct
-        ? `Correct! ${reasoning}`
-        : `Incorrect. ${reasoning}`)
-      setResults((prev) => [...prev, {
-        question: `${question.a} + ${question.b}`,
-        userAnswer: answer,
-        correctAnswer: data.correctAnswer,
-        correct: data.correct,
-        time: timeTaken,
-      }])
-      if (isAdaptive) {
-        setAdaptScore(prev => { const next = data.correct ? Math.min(3, prev + 0.25) : Math.max(0, prev - 0.35); adaptScoreRef.current = next; return next })
+      try {
+        const res = await fetch(`${API}/addition-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  a: question.a, b: question.b, answer: Number(answer), sessionGoal }) })
+        const data = await res.json()
+        setIsCorrect(data.correct)
+        const newScore = score + (data.correct ? 1 : 0)
+        setScore(newScore)
+        const reasoning = `${question.a} + ${question.b} = ${data.correctAnswer ?? '?'}`
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${reasoning}` + _ci)
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`❌ Wrong answer — Perfect Solve ended! Correct: ${data.correctAnswer ?? '?'}`)
+          setRevealed(true)
+          timer.reset()
+          setResults((prev) => [...prev, {
+            question: `${question.a} + ${question.b}`,
+            userAnswer: answer,
+            correctAnswer: data.correctAnswer,
+            correct: false,
+            time: timeTaken,
+          }])
+          setFinished(true)
+          return
+        } else {
+          setFeedback(`Incorrect. ${reasoning}`)
+        }
+        setResults((prev) => [...prev, {
+          question: `${question.a} + ${question.b}`,
+          userAnswer: answer,
+          correctAnswer: data.correctAnswer,
+          correct: data.correct,
+          time: timeTaken,
+        }])
+        if (isAdaptive) {
+          setAdaptScore(prev => { const next = data.correct ? Math.min(3, prev + 0.25) : Math.max(0, prev - 0.35); adaptScoreRef.current = next; return next })
+        }
+        setRevealed(true)
+      } catch (e) {
+        console.error('Failed to check addition answer:', e)
       }
-      setRevealed(true)
       return
     }
+
 
     if (questionNumber >= totalQ) {
       setFinished(true)
@@ -36685,11 +36810,7 @@ function AdditionApp({ onBack }) {
     if (revealed) return
     const timeTaken = timer.stop()
     // POST to backend API with solve flag to get the solution
-    const res = await fetch(`${API}/addition-api/check`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ a: question.a, b: question.b, answer: '', solve: true }),
-    })
+    const res = await fetch(`${API}/addition-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  a: question.a, b: question.b, answer: '', solve: true, sessionGoal }) })
     const data = await res.json()
     setIsCorrect(false)
     const reasoning = `${question.a} + ${question.b} = ${data.correctAnswer}`
@@ -36715,7 +36836,7 @@ function AdditionApp({ onBack }) {
   const curAdaptLevel = adaptiveLevel(adaptScore)
 
   return (
-    <QuizLayout title="Addition" subtitle="Choose a level and solve addition questions" onBack={onBack} timer={started && !finished ? timer : null}>
+    <QuizLayout title="Addition" subtitle="Choose a level and solve addition questions" onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
       {!started && !finished && <div className="welcome-box">
         <p className="welcome-text">Practice addition!</p>
         <div className="checkbox-group" style={{ marginBottom: '12px' }}>
@@ -36730,7 +36851,45 @@ function AdditionApp({ onBack }) {
             Adaptive
           </label>
         </div>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="additionapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
         {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Starts easy and smoothly adjusts to your level as you answer.</p>}
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} placeholder={String(DEFAULT_TOTAL)} />
@@ -37418,7 +37577,7 @@ function GymQuiz({ title, subtitle, typeKeys, welcomeText, algebraInput, onBack 
     }
     const gen = GYM_TYPES[t]?.generator
     setQuestion(gen ? gen(d) : null)
-    timer.start()
+    timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
   }
 
   // Stop button (adaptive mode only): end the session and show the results screen.
@@ -37695,24 +37854,45 @@ function BasicArithApp({ onBack }) {
   const [revealed, setRevealed] = useState(false)
   // Results array
   const [results, setResults] = useState([])
+  const [sessionGoal, setSessionGoal] = useState('standard')
   // Timer
   const timer = useTimer()
   const advanceFnRef = useRef(null)
 
-  const effectiveDiff = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
+  const effectiveDiff = () => (isAdaptive) ? adaptiveLevel(adaptScoreRef.current) : difficulty
 
   /**
    * fetchQuestion(): Fetch next arithmetic question
    * Generates random a op b = ? with specified difficulty and operation
    */
-  const fetchQuestion = async () => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/basicarith-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const fetchQuestion = async () => {
     setLoading(true)
     setFeedback(''); setAnswer(''); setRevealed(false); setIsCorrect(null)
-    const res = await fetch(`${API}/basicarith-api/question?difficulty=${effectiveDiff()}`)
+    const res = await fetch(`${API}/basicarith-api/question?difficulty=${effectiveDiff()}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
     const data = await res.json()
     setQuestion(data)
     setLoading(false)
-    timer.start()
+    timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
   }
 
   /**
@@ -37783,14 +37963,21 @@ function BasicArithApp({ onBack }) {
       if (answer === '') return
       const timeTaken = timer.stop()
       // POST to backend to validate answer for arithmetic operation: a op b
-      const res = await fetch(`${API}/basicarith-api/check`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ a: question.a, b: question.b, op: question.op, answer: Number(answer) }),
-      })
+      const res = await fetch(`${API}/basicarith-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  a: question.a, b: question.b, op: question.op, answer: Number(answer), sessionGoal }) })
       const data = await res.json()
       setIsCorrect(data.correct)
       if (data.correct) setScore(s => s + 1)
-      setFeedback(data.correct ? `Correct! ${question.prompt} = ${data.correctAnswer}` : `Incorrect. ${question.prompt} = ${data.correctAnswer}`)
+      (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${question.prompt} = ${data.correctAnswer}`.slice(0,-1) + _ci + `Correct! ${question.prompt} = ${data.correctAnswer}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. ${question.prompt} = ${data.correctAnswer}` + ' ❌ Perfect Solve ended.')
+          setFinished(true); timer.reset()
+        } else {
+          setFeedback(`Incorrect. ${question.prompt} = ${data.correctAnswer}`)
+        }
+      })()
       // Store result with time taken
       setResults(prev => [...prev, {
         question: question.prompt,
@@ -37819,11 +38006,7 @@ function BasicArithApp({ onBack }) {
     if (revealed) return
     const timeTaken = timer.stop()
     // POST to backend API with solve flag to get the solution
-    const res = await fetch(`${API}/basicarith-api/check`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ a: question.a, b: question.b, op: question.op, answer: '', solve: true }),
-    })
+    const res = await fetch(`${API}/basicarith-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  a: question.a, b: question.b, op: question.op, answer: '', solve: true, sessionGoal }) })
     const data = await res.json()
     setIsCorrect(false)
     setFeedback(`Solution: ${question.prompt} = ${data.correctAnswer}`)
@@ -37848,7 +38031,7 @@ function BasicArithApp({ onBack }) {
   const curAdaptLevel = adaptiveLevel(adaptScore)
 
   return (
-    <QuizLayout title="Basic Arithmetic" subtitle="Add, subtract, multiply & divide positive & negative numbers" onBack={onBack} timer={started && !finished ? timer : null}>
+    <QuizLayout title="Basic Arithmetic" subtitle="Add, subtract, multiply & divide positive & negative numbers" onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
       {!started && !finished && <div className="welcome-box">
         <p className="welcome-text">Practice basic arithmetic!</p>
         <div className="checkbox-group" style={{ marginBottom: '12px' }}>
@@ -37863,7 +38046,45 @@ function BasicArithApp({ onBack }) {
             Adaptive
           </label>
         </div>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="basicarithapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
         {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Starts easy and smoothly adjusts to your level as you answer.</p>}
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} />
@@ -37943,11 +38164,12 @@ function QuadraticApp({ onBack }) {
   const [revealed, setRevealed] = useState(false)
   // Array of {question, userAnswer, correctAnswer, correct, time} objects
   const [results, setResults] = useState([])
+  const [sessionGoal, setSessionGoal] = useState('standard')
   // Timer instance for tracking time spent per question
   const timer = useTimer()
   const advanceFnRef = useRef(null)
 
-  const effectiveDiff = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
+  const effectiveDiff = () => (isAdaptive) ? adaptiveLevel(adaptScoreRef.current) : difficulty
 
   /**
    * fetchQuestion(selectedDifficulty?): Fetch next quadratic substitution question from backend
@@ -37955,18 +38177,38 @@ function QuadraticApp({ onBack }) {
    * Returns: {a, b, c, x} with the actual answer pre-calculated server-side
    * Resets form state and starts timer for this question
    */
-  const fetchQuestion = async (selectedDifficulty = difficulty) => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/quadratic-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const fetchQuestion = async (selectedDifficulty = difficulty) => {
     setLoading(true)
     setAnswer('')
     setFeedback('')
     setRevealed(false)
     setIsCorrect(null)
     // Fetch new question with specified difficulty
-    const res = await fetch(`${API}/quadratic-api/question?difficulty=${effectiveDiff()}`)
+    const res = await fetch(`${API}/quadratic-api/question?difficulty=${effectiveDiff()}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
     const data = await res.json()
     setQuestion(data)
     setLoading(false)
-    timer.start()
+    timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
   }
 
   const startQuiz = async () => {
@@ -38014,11 +38256,7 @@ function QuadraticApp({ onBack }) {
       if (answer === '') return
       const timeTaken = timer.stop()
       // POST to backend to validate quadratic substitution answer
-      const res = await fetch(`${API}/quadratic-api/check`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ a: question.a, b: question.b, c: question.c, x: question.x, answer: Number(answer) }),
-      })
+      const res = await fetch(`${API}/quadratic-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  a: question.a, b: question.b, c: question.c, x: question.x, answer: Number(answer), sessionGoal }) })
       const data = await res.json()
       setIsCorrect(data.correct)
       if (data.correct) setScore((s) => s + 1)
@@ -38030,9 +38268,17 @@ function QuadraticApp({ onBack }) {
       const termB = b * x
       const sign = (v) => v >= 0 ? `+ ${v}` : `− ${Math.abs(v)}`
       const reasoning = `y = ${a}(${x})² ${sign(b)}(${x}) ${sign(c)}\n= ${a}(${xSq}) ${sign(termB)} ${sign(c)}\n= ${termA} ${sign(termB)} ${sign(c)}\n= ${data.correctAnswer}`
-      setFeedback(data.correct
-        ? `Correct!\n${reasoning}`
-        : `Incorrect.\n${reasoning}`)
+      (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct!\n${reasoning}`.slice(0,-1) + _ci + `Correct!\n${reasoning}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect.\n${reasoning}` + ' ❌ Perfect Solve ended.')
+          setFinished(true); timer.reset()
+        } else {
+          setFeedback(`Incorrect.\n${reasoning}`)
+        }
+      })()
       setResults((prev) => [...prev, {
         question: `y = ${a}x² ${b >= 0 ? '+' : '−'} ${Math.abs(b)}x ${c >= 0 ? '+' : '−'} ${Math.abs(c)}, x=${x}`,
         userAnswer: answer,
@@ -38067,11 +38313,7 @@ function QuadraticApp({ onBack }) {
     if (revealed) return
     const timeTaken = timer.stop()
     // POST to backend API with solve flag to get the solution
-    const res = await fetch(`${API}/quadratic-api/check`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ a: question.a, b: question.b, c: question.c, x: question.x, answer: '', solve: true }),
-    })
+    const res = await fetch(`${API}/quadratic-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  a: question.a, b: question.b, c: question.c, x: question.x, answer: '', solve: true, sessionGoal }) })
     const data = await res.json()
     setIsCorrect(false)
     // Generate step-by-step working for feedback
@@ -38103,7 +38345,7 @@ function QuadraticApp({ onBack }) {
   const curAdaptLevel = adaptiveLevel(adaptScore)
 
   return (
-    <QuizLayout title="Quadratic" subtitle="Given x, find y = ax² + bx + c" onBack={onBack} timer={started && !finished ? timer : null}>
+    <QuizLayout title="Quadratic" subtitle="Given x, find y = ax² + bx + c" onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
       {!started && !finished && <div className="welcome-box">
         <p className="welcome-text">Practice quadratic substitution!</p>
         <div className="checkbox-group" style={{ marginBottom: '12px' }}>
@@ -38118,7 +38360,45 @@ function QuadraticApp({ onBack }) {
             Adaptive
           </label>
         </div>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="quadraticapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
         {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Starts easy and smoothly adjusts to your level as you answer.</p>}
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} placeholder={String(DEFAULT_TOTAL)} />
@@ -38322,6 +38602,7 @@ function MultiplyApp({ onBack }) {
   const [longestStreak, setLongestStreak] = useState(0)
   const [fastestTime, setFastestTime] = useState(null)
   const [l3TimeRemaining, setL3TimeRemaining] = useState(MULT_LEVEL3_TIMEOUT_SECONDS)
+  const [sessionGoal, setSessionGoal] = useState('standard')
   const l3TimerRef = useRef(null)
   const l3DeadlineRef = useRef(0)
   const timer = useTimer()
@@ -38334,7 +38615,7 @@ function MultiplyApp({ onBack }) {
     setFeedback('')
     setRevealed(false)
     setIsCorrect(null)
-    timer.start()
+    timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
     if (level === 3) startLevel3Countdown()
   }
 
@@ -38581,6 +38862,29 @@ function MultiplyApp({ onBack }) {
       {phase === 'picker' && (
         <div className="welcome-box">
           <p className="welcome-text">Choose your level</p>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="multiplyapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', margin: '12px 0' }}>
             <button onClick={startLevel1}>
               Level 1 — Guided Random Practice
@@ -38746,6 +39050,7 @@ function VocabApp({ onBack }) {
   const loadVocabSeen = () => { try { return JSON.parse(localStorage.getItem(VOCAB_SEEN_KEY) || '[]') } catch { return [] } }
   const saveVocabSeen = (ids) => { try { localStorage.setItem(VOCAB_SEEN_KEY, JSON.stringify(ids)) } catch {} }
   const [seenIds, setSeenIds] = useState(loadVocabSeen)
+  const [sessionGoal, setSessionGoal] = useState('standard')
   // Timer instance for tracking time spent per question
   const timer = useTimer()
   const advanceFnRef = useRef(null)
@@ -38759,7 +39064,27 @@ function VocabApp({ onBack }) {
    * loadQuestion(excludeIds?): Fetch next vocabulary question from backend
    * Persists seen IDs to localStorage for cross-session no-repeat
    */
-  const loadQuestion = async (excludeIds) => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/vocab-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const loadQuestion = async (excludeIds) => {
     setLoading(true)
     setSelected('')
     setFeedback('')
@@ -38767,14 +39092,14 @@ function VocabApp({ onBack }) {
     setRevealed(false)
     const ids = excludeIds || seenIds
     const excludeParam = ids.length ? `&exclude=${ids.join(',')}` : ''
-    const res = await fetch(`${API}/vocab-api/question?difficulty=${effectiveDiff()}${excludeParam}`)
+    const res = await fetch(`${API}/vocab-api/question?difficulty=${effectiveDiff()}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
     const data = await res.json()
     setQuestion(data)
     const newSeen = [...ids, data.id]
     setSeenIds(newSeen)
     saveVocabSeen(newSeen)
     setLoading(false)
-    timer.start()
+    timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
   }
 
   /**
@@ -38810,18 +39135,22 @@ function VocabApp({ onBack }) {
     const timeTaken = timer.stop()
     setSelected(option)
     // POST to backend to validate the selected definition
-    const res = await fetch(`${API}/vocab-api/check`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: question.id, answerOption: option }),
-    })
+    const res = await fetch(`${API}/vocab-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  id: question.id, answerOption: option, sessionGoal }) })
     const data = await res.json()
     setIsCorrect(data.correct)
     if (data.correct) setScore((s) => s + 1)
     // Show feedback with correct answer text
-    setFeedback(data.correct
-      ? `Correct! "${data.correctAnswerText}"`
-      : `Incorrect. The right definition is: "${data.correctAnswerText}"`)
+    (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! "${data.correctAnswerText}"`.slice(0,-1) + _ci + `Correct! "${data.correctAnswerText}"`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. The right definition is: "${data.correctAnswerText}"` + ' ❌ Perfect Solve ended.')
+          setFinished(true); timer.reset()
+        } else {
+          setFeedback(`Incorrect. The right definition is: "${data.correctAnswerText}"`)
+        }
+      })()
     // Extract the user's selected definition from options array
     const userDef = question.options[['A','B','C','D'].indexOf(option)]
     // Truncate long definitions to fit in results table
@@ -38862,11 +39191,7 @@ function VocabApp({ onBack }) {
     if (revealed) return
     const timeTaken = timer.stop()
     // POST to backend API with solve flag to get the solution
-    const res = await fetch(`${API}/vocab-api/check`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: question.id, answerOption: '', solve: true }),
-    })
+    const res = await fetch(`${API}/vocab-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  id: question.id, answerOption: '', solve: true, sessionGoal }) })
     const data = await res.json()
     setIsCorrect(false)
     // Show feedback with correct answer text
@@ -38929,7 +39254,7 @@ function VocabApp({ onBack }) {
   }, [started, finished, revealed, loading, question])
 
   return (
-    <QuizLayout title="Vocab Builder" subtitle="Pick the correct definition for the word" onBack={onBack} timer={started && !finished ? timer : null}>
+    <QuizLayout title="Vocab Builder" subtitle="Pick the correct definition for the word" onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
       {!started && !finished && <div className="welcome-box">
         <p className="welcome-text">Build your vocabulary!</p>
         <div className="checkbox-group" style={{ marginBottom: '12px' }}>
@@ -38944,7 +39269,45 @@ function VocabApp({ onBack }) {
             Adaptive
           </label>
         </div>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="vocabapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
         {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Starts easy and smoothly adjusts to your level as you answer.</p>}
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} placeholder={String(DEFAULT_TOTAL)} />
@@ -39067,6 +39430,7 @@ function makeMCQuizApp({ title, subtitle, apiPath, diffLabels, tip, adaptiveOnly
     const [loading, setLoading] = useState(false)
     const [loadError, setLoadError] = useState('')
     const [revealed, setRevealed] = useState(false)
+  const [sessionGoal, setSessionGoal] = useState('standard')
     const [results, setResults] = useState([])
     const [correctOption, setCorrectOption] = useState('')
     const timer = useTimer()
@@ -39077,12 +39441,20 @@ function makeMCQuizApp({ title, subtitle, apiPath, diffLabels, tip, adaptiveOnly
 
     const effectiveDifficulty = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
 
+    const handleTimeout = async () => {
+      if (revealed || finished) return
+      timer.reset()
+      setIsCorrect(false); setRevealed(true)
+      setFeedback('⏰ Time\'s up! Moving to next question.')
+      setResults(prev => [...prev, { prompt: question?.prompt || '', userAnswer: '(timeout)', correctAnswer: '—', correct: false, time: 0 }])
+    }
+
     const loadQuestion = async () => {
       setLoading(true)
       setLoadError('')
       try {
         const diff = effectiveDifficulty()
-        const r = await fetch(`${API}/${apiPath}/question?difficulty=${diff}`)
+        const r = await fetch(`${API}/${apiPath}/question?difficulty=${diff}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
         if (!r.ok) throw new Error(`Server returned ${r.status}`)
         const data = await r.json()
         if (!data || !data.options || !Array.isArray(data.options) || data.options.length < 2) {
@@ -39096,7 +39468,7 @@ function makeMCQuizApp({ title, subtitle, apiPath, diffLabels, tip, adaptiveOnly
         setRevealed(false)
         submittedRef.current = false
         advancedRef.current = false
-        timer.start()
+        timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(effectiveDifficulty ? effectiveDifficulty() : (difficulty || 'easy'), isAdaptive))
       } catch (e) {
         console.error(`Failed to load ${title} question:`, e)
         setQuestion(null)
@@ -39155,15 +39527,30 @@ function makeMCQuizApp({ title, subtitle, apiPath, diffLabels, tip, adaptiveOnly
       const payload = { ...question, selectedOption: letter }
       try {
         const r = await fetch(`${API}/${apiPath}/check`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+          body: JSON.stringify({ ...payload, sessionGoal }),
         })
         const data = await r.json()
         setIsCorrect(data.correct); setRevealed(true)
         setCorrectOption(data.correctOption || '')
         if (data.correct) setScore(s => s + 1)
         const correctText = data.correctDisplay || (question.options.find(o => o.option === data.correctOption)?.text) || ''
-        setFeedback(data.correct ? `Correct! ${correctText}` : `Incorrect. Answer: ${data.correctOption}. ${correctText}`)
+        const coinMsg = (data.lil?.coinsEarned ?? 0) > 0 ? ` (+${data.lil.coinsEarned}🪙)` : ''
+        if (!data.correct && sessionGoal === 'perfect') {
+          setFeedback(`❌ Wrong — Perfect Solve ended! Correct: ${data.correctOption}. ${correctText}`)
+          timer.reset()
+          setFinished(true)
+          setResults(prev => [...prev, {
+            prompt: question.prompt,
+            userAnswer: letter,
+            correctAnswer: data.correctOption + (correctText ? `: ${correctText}` : ''),
+            correct: false,
+            time: timeTaken,
+          }])
+          return
+        }
+        setFeedback(data.correct ? `✅ Correct!${coinMsg} ${correctText}` : `❌ Incorrect. Answer: ${data.correctOption}. ${correctText}`)
         setResults(prev => [...prev, {
           prompt: question.prompt,
           userAnswer: letter,
@@ -39190,8 +39577,9 @@ function makeMCQuizApp({ title, subtitle, apiPath, diffLabels, tip, adaptiveOnly
       timer.stop()
       try {
         const r = await fetch(`${API}/${apiPath}/check`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...question, selectedOption: '', solve: true }),
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+          body: JSON.stringify({ ...question, selectedOption: '', solve: true, sessionGoal }),
         })
         const data = await r.json()
         setIsCorrect(false); setRevealed(true)
@@ -39215,7 +39603,7 @@ function makeMCQuizApp({ title, subtitle, apiPath, diffLabels, tip, adaptiveOnly
     const curAdaptLevel = adaptiveLevel(adaptScore)
 
     return (
-      <QuizLayout title={title} subtitle={subtitle} onBack={onBack} timer={started && !finished ? timer : null}>
+      <QuizLayout title={title} subtitle={subtitle} onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
         {!started && !finished && <div className="welcome-box">
           <p className="welcome-text">Practice {title.toLowerCase()}!</p>
           {tip && <p style={{ fontSize: '0.85rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>{tip}</p>}
@@ -39241,6 +39629,45 @@ function makeMCQuizApp({ title, subtitle, apiPath, diffLabels, tip, adaptiveOnly
             </div>
           )}
           {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Starts easy and smoothly adjusts to your level as you answer.</p>}
+          {!adaptiveOnly && (
+            <>
+              <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+              <div className="checkbox-group" style={{ marginBottom: '8px' }}>
+                {[
+                  { key: 'standard', label: 'Standard' },
+                  { key: 'speed',    label: '⚡ Speed Run' },
+                  { key: 'perfect',  label: '🎯 Perfect Solve' },
+                  { key: 'revision', label: '🔄 Revision' },
+                ].map(g => (
+                  <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+                    style={sessionGoal === g.key ? (
+                      g.key === 'speed'    ? { background: 'rgba(255,179,0,0.18)',  borderColor: '#ffb300', color: '#ffb300' } :
+                      g.key === 'perfect'  ? { background: 'rgba(244,67,54,0.18)',  borderColor: '#f44336', color: '#f44336' } :
+                      g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+                    ) : {}}>
+                    <input type="radio" name={`${apiPath}-goal`} checked={sessionGoal === g.key}
+                      onChange={() => setSessionGoal(g.key)} />
+                    {g.label}
+                  </label>
+                ))}
+              </div>
+              {sessionGoal === 'speed' && (
+                <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+                  ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s.
+                </p>
+              )}
+              {sessionGoal === 'perfect' && (
+                <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+                  🎯 One wrong answer ends the quiz immediately.
+                </p>
+              )}
+              {sessionGoal === 'revision' && (
+                <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+                  🔄 Focuses on topics you previously answered incorrectly.
+                </p>
+              )}
+            </>
+          )}
           <div className="question-count-row">
             <label className="question-count-label">How many questions?</label>
             <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} />
@@ -39318,6 +39745,7 @@ function makeQuizApp({ title, subtitle, apiPath, diffLabels, placeholders, tip, 
     const [loading, setLoading] = useState(false)
     const [loadError, setLoadError] = useState('')
     const [revealed, setRevealed] = useState(false)
+  const [sessionGoal, setSessionGoal] = useState('standard')
     const [results, setResults] = useState([])
     const timer = useTimer()
     const advanceFnRef = useRef(null)
@@ -39329,12 +39757,20 @@ function makeQuizApp({ title, subtitle, apiPath, diffLabels, placeholders, tip, 
 
     const effectiveDifficulty = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
 
+    const handleTimeout = async () => {
+      if (revealed || finished) return
+      timer.reset()
+      setIsCorrect(false); setRevealed(true)
+      setFeedback('⏰ Time\'s up! Moving to next question.')
+      setResults(prev => [...prev, { prompt: question?.prompt || '', userAnswer: '(timeout)', correctAnswer: '—', correct: false, time: 0 }])
+    }
+
     const loadQuestion = async () => {
       setLoading(true)
       setLoadError('')
       try {
         const diff = effectiveDifficulty()
-        const r = await fetch(`${API}/${apiPath}/question?difficulty=${diff}`)
+        const r = await fetch(`${API}/${apiPath}/question?difficulty=${diff}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
         if (!r.ok) throw new Error(`Server returned ${r.status}`)
         const data = await r.json()
         // Defensive: a question must have a non-empty prompt to be displayable.
@@ -39350,7 +39786,7 @@ function makeQuizApp({ title, subtitle, apiPath, diffLabels, placeholders, tip, 
         setRevealed(false)
         submittedRef.current = false
         advancedRef.current = false
-        timer.start()
+        timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(effectiveDifficulty ? effectiveDifficulty() : (difficulty || 'easy'), isAdaptive))
       } catch (e) {
         console.error(`Failed to load ${title} question:`, e)
         setQuestion(null)
@@ -39403,11 +39839,24 @@ function makeQuizApp({ title, subtitle, apiPath, diffLabels, placeholders, tip, 
       const timeTaken = timer.stop()
       const payload = { ...question, [answerField || 'userAnswer']: answer.trim() }
       try {
-        const r = await fetch(`${API}/${apiPath}/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+        const r = await fetch(`${API}/${apiPath}/check`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+          body: JSON.stringify({ ...payload, sessionGoal })
+        })
         const data = await r.json()
         setIsCorrect(data.correct); setRevealed(true)
         if (data.correct) setScore(s => s + 1)
-        setFeedback(data.correct ? `Correct! ${data.display}` : `Incorrect. Answer: ${data.display}`)
+        const coinMsg = (data.lil?.coinsEarned ?? 0) > 0 ? ` (+${data.lil.coinsEarned}🪙)` : ''
+        if (!data.correct && sessionGoal === 'perfect') {
+          // Perfect Solve: any wrong answer immediately ends the quiz
+          setFeedback(`❌ Wrong answer — Perfect Solve ended! Correct: ${data.display || ''}`)
+          timer.reset()
+          setFinished(true)
+          setResults(prev => [...prev, { prompt: question.prompt, userAnswer: answer.trim(), correctAnswer: data.display, correct: false, time: timeTaken }])
+          return
+        }
+        setFeedback(data.correct ? `✅ Correct!${coinMsg} ${data.display || ''}` : `❌ Incorrect. Answer: ${data.display || ''}`)
         setResults(prev => [...prev, { prompt: question.prompt, userAnswer: answer.trim(), correctAnswer: data.display, correct: data.correct, time: timeTaken }])
         // Smooth adaptive adjustment
         if (isAdaptive) {
@@ -39428,7 +39877,11 @@ function makeQuizApp({ title, subtitle, apiPath, diffLabels, placeholders, tip, 
       timer.stop()
       const payload = { ...question, [answerField || 'userAnswer']: '', solve: true }
       try {
-        const r = await fetch(`${API}/${apiPath}/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+        const r = await fetch(`${API}/${apiPath}/check`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+          body: JSON.stringify({ ...payload, sessionGoal })
+        })
         const data = await r.json()
         setIsCorrect(false); setRevealed(true)
         const display = data.display || data.correctAnswer || data.answer || ''
@@ -39460,7 +39913,7 @@ function makeQuizApp({ title, subtitle, apiPath, diffLabels, placeholders, tip, 
     const curAdaptLevel = adaptiveLevel(adaptScore)
 
     return (
-      <QuizLayout title={title} subtitle={subtitle} onBack={onBack} timer={started && !finished ? timer : null}>
+      <QuizLayout title={title} subtitle={subtitle} onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
         {!started && !finished && <div className="welcome-box">
           <p className="welcome-text">Practice {title.toLowerCase()}!</p>
           {tip && <p style={{ fontSize: '0.85rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>{tip}</p>}
@@ -39479,6 +39932,41 @@ function makeQuizApp({ title, subtitle, apiPath, diffLabels, placeholders, tip, 
           {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>
             Starts easy and smoothly adjusts to your level as you answer.
           </p>}
+          <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+          <div className="checkbox-group" style={{ marginBottom: '8px' }}>
+            {[
+              { key: 'standard', label: 'Standard' },
+              { key: 'speed',    label: '⚡ Speed Run' },
+              { key: 'perfect',  label: '🎯 Perfect Solve' },
+              { key: 'revision', label: '🔄 Revision' },
+            ].map(g => (
+              <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+                style={sessionGoal === g.key ? (
+                  g.key === 'speed'    ? { background: 'rgba(255,179,0,0.18)',  borderColor: '#ffb300', color: '#ffb300' } :
+                  g.key === 'perfect'  ? { background: 'rgba(244,67,54,0.18)',  borderColor: '#f44336', color: '#f44336' } :
+                  g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+                ) : {}}>
+                <input type="radio" name={`${apiPath}-goal`} checked={sessionGoal === g.key}
+                  onChange={() => setSessionGoal(g.key)} />
+                {g.label}
+              </label>
+            ))}
+          </div>
+          {sessionGoal === 'speed' && (
+            <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+              ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+            </p>
+          )}
+          {sessionGoal === 'perfect' && (
+            <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+              🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+            </p>
+          )}
+          {sessionGoal === 'revision' && (
+            <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+              🔄 Focuses on topics you previously answered incorrectly.
+            </p>
+          )}
           <div className="question-count-row">
             <label className="question-count-label">How many questions?</label>
             <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} />
@@ -39625,19 +40113,40 @@ function DotProdApp({ onBack }) {
   const [loading, setLoading] = useState(false)
   const [revealed, setRevealed] = useState(false)
   const [results, setResults] = useState([])
+  const [sessionGoal, setSessionGoal] = useState('standard')
   const timer = useTimer()
   const advanceFnRef = useRef(null)
   const submittedRef = useRef(false)
   const advancedRef = useRef(false)
 
-  const effectiveDiff = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
+  const effectiveDiff = () => (isAdaptive) ? adaptiveLevel(adaptScoreRef.current) : difficulty
   const curAdaptLevel = adaptiveLevel(adaptScore)
 
-  const loadQuestion = async () => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/dotprod-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const loadQuestion = async () => {
     setLoading(true)
     try {
       const diff = effectiveDiff()
-      const r = await fetch(`${API}/dotprod-api/question?difficulty=${diff}`)
+      const r = await fetch(`${API}/dotprod-api/question?difficulty=${effectiveDiff()}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
       const data = await r.json()
       setQuestion(data)
       setAnswer('')
@@ -39664,7 +40173,7 @@ function DotProdApp({ onBack }) {
       } else {
         setGridAnswer([])
       }
-      timer.start()
+      timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
     } catch (e) { console.error('Failed to load Dot Products question:', e) }
     setLoading(false)
   }
@@ -39721,11 +40230,21 @@ function DotProdApp({ onBack }) {
     const timeTaken = timer.stop()
     const payload = { ...question, userAnswer }
     try {
-      const r = await fetch(`${API}/dotprod-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      const r = await fetch(`${API}/dotprod-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({ ...payload, sessionGoal }) })
       const data = await r.json()
       setIsCorrect(data.correct); setRevealed(true)
       if (data.correct) setScore(s => s + 1)
-      setFeedback(data.correct ? `Correct! ${data.display}` : `Incorrect. Answer: ${data.display}`)
+      (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${data.display}`.slice(0,-1) + _ci + `Correct! ${data.display}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. Answer: ${data.display}` + ' ❌ Perfect Solve ended.')
+          setFinished(true); timer.reset()
+        } else {
+          setFeedback(`Incorrect. Answer: ${data.display}`)
+        }
+      })()
       setResults(prev => [...prev, { prompt: question.prompt, userAnswer, correctAnswer: data.display, correct: data.correct, time: timeTaken }])
       if (isAdaptive) {
         setAdaptScore(prev => {
@@ -39857,7 +40376,7 @@ function DotProdApp({ onBack }) {
   }
 
   return (
-    <QuizLayout title="Dot Products" subtitle="Vectors, matrix multiply, fill blanks" onBack={onBack} timer={started && !finished ? timer : null}>
+    <QuizLayout title="Dot Products" subtitle="Vectors, matrix multiply, fill blanks" onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
       {!started && !finished && <div className="welcome-box">
         <p className="welcome-text">Practice dot products & matrix multiplication!</p>
         <p style={{ fontSize: '0.85rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Easy/Medium: dot product of vectors. Hard: matrix multiply. Extra Hard: fill missing values.</p>
@@ -39873,7 +40392,45 @@ function DotProdApp({ onBack }) {
             Adaptive
           </label>
         </div>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="dotprodapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
         {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Starts easy and smoothly adjusts to your level as you answer.</p>}
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} />
@@ -40470,7 +41027,7 @@ function GymApp({ onBack }) {
       setSelectedOption(''); setCorrectOption('')
       setFeedback(''); setIsCorrect(null); setRevealed(false)
       submittedRef.current = false; advancedRef.current = false
-      timer.start()
+      timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
     } catch (e) {
       console.error('Failed to load Gym question:', e)
       setQuestion(null)
@@ -41546,25 +42103,46 @@ function SquaringApp({ onBack }) {
   const [valBSq, setValBSq] = useState('')
   const [val2AB, setVal2AB] = useState('')
   const [valFinal, setValFinal] = useState('')
+  const [sessionGoal, setSessionGoal] = useState('standard')
   const refASq = useRef(null)
   const refBSq = useRef(null)
   const ref2AB = useRef(null)
   const refFinal = useRef(null)
 
-  const effectiveDiff = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
+  const effectiveDiff = () => (isAdaptive) ? adaptiveLevel(adaptScoreRef.current) : difficulty
   const curAdaptLevel = adaptiveLevel(adaptScore)
 
-  const loadQuestion = async () => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/squaring-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const loadQuestion = async () => {
     setLoading(true)
     try {
       const diff = effectiveDiff()
-      const r = await fetch(`${API}/squaring-api/question?difficulty=${diff}`)
+      const r = await fetch(`${API}/squaring-api/question?difficulty=${effectiveDiff()}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
       const data = await r.json()
       setQuestion(data)
       setValASq(''); setValBSq(''); setVal2AB(''); setValFinal('')
       setFeedback(''); setIsCorrect(null); setRevealed(false)
       submittedRef.current = false; advancedRef.current = false
-      timer.start()
+      timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
       setTimeout(() => refASq.current?.focus(), 50)
     } catch (e) { console.error('Failed to load Squaring question:', e) }
     setLoading(false)
@@ -41599,11 +42177,21 @@ function SquaringApp({ onBack }) {
     const timeTaken = timer.stop()
     const userAnswer = `${valASq.trim()}|${valBSq.trim()}|${val2AB.trim()}|${valFinal.trim()}`
     try {
-      const r = await fetch(`${API}/squaring-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...question, userAnswer }) })
+      const r = await fetch(`${API}/squaring-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  ...question, userAnswer, sessionGoal }) })
       const data = await r.json()
       setIsCorrect(data.correct); setRevealed(true)
       if (data.correct) setScore(s => s + 1)
-      setFeedback(data.correct ? `Correct! ${question.n}² = ${question.answer}` : `Incorrect. ${question.display}`)
+      (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${question.n}² = ${question.answer}`.slice(0,-1) + _ci + `Correct! ${question.n}² = ${question.answer}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. ${question.display}` + ' ❌ Perfect Solve ended.')
+          setFinished(true); timer.reset()
+        } else {
+          setFeedback(`Incorrect. ${question.display}`)
+        }
+      })()
       setResults(prev => [...prev, { prompt: question.prompt, userAnswer: valFinal.trim(), correctAnswer: String(question.answer), correct: data.correct, time: timeTaken }])
       if (isAdaptive) {
         setAdaptScore(prev => { const next = data.correct ? Math.min(3, prev + 0.25) : Math.max(0, prev - 0.35); adaptScoreRef.current = next; return next })
@@ -41616,11 +42204,7 @@ function SquaringApp({ onBack }) {
     submittedRef.current = true
     timer.stop()
     try {
-      const r = await fetch(`${API}/squaring-api/check`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...question, userAnswer: '', solve: true }),
-      })
+      const r = await fetch(`${API}/squaring-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  ...question, userAnswer: '', solve: true, sessionGoal }) })
       const data = await r.json()
       setIsCorrect(false); setRevealed(true)
       const display = data.display || data.correctAnswer || data.answer || ''
@@ -41662,7 +42246,7 @@ function SquaringApp({ onBack }) {
   )
 
   return (
-    <QuizLayout title="Squaring" subtitle="(a + b)² = a² + 2ab + b²" onBack={onBack} timer={started && !finished ? timer : null}>
+    <QuizLayout title="Squaring" subtitle="(a + b)² = a² + 2ab + b²" onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
       {!started && !finished && <div className="welcome-box">
         <p className="welcome-text">Square numbers quickly using the identity (a + b)² = a² + 2ab + b²</p>
         <p style={{ fontSize: '0.85rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Split any number into a round part (a) and remainder (b), then fill in all four boxes.</p>
@@ -41678,7 +42262,45 @@ function SquaringApp({ onBack }) {
             Adaptive
           </label>
         </div>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="squaringapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
         {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Starts easy and smoothly adjusts to your level as you answer.</p>}
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} />
@@ -41983,6 +42605,7 @@ function RandomMixApp({ onBack }) {
   const [results, setResults] = useState([])
   const [totalQuestions, setTotalQuestions] = useState(20)
   const [numQInput, setNumQInput] = useState('20')
+  const [sessionGoal, setSessionGoal] = useState('standard')
   const timer = useTimer()
   const advanceFnRef = useRef(null)
   const submittedRef = useRef(false)
@@ -42009,6 +42632,22 @@ function RandomMixApp({ onBack }) {
     return { ...prev, [topicKey]: Math.max(0, Math.min(DIFF_LEVELS.length - 1, next)) }
   })
 
+  const handleTimeout = () => {
+    if (submittedRef.current) return
+    submittedRef.current = true
+    setIsCorrect(false)
+    setRevealed(true)
+    setFeedback("⏱️ Time's up!")
+    setResults(prev => [...prev, {
+      question: `[${currentTopic?.name || '?'}] ${getPromptForType(currentTopic?.key, question) || question.prompt || '?'}`,
+      userAnswer: '(timeout)',
+      correctAnswer: '—',
+      correct: false,
+      time: getSpeedRunLimit(currentDifficulty(), true)
+    }])
+    if (currentTopic) setTopicDiff(currentTopic.key, d => d - 1)
+  }
+
   const loadQuestion = async () => {
     const topic = pickRandomTopic()
     if (!topic) {
@@ -42019,7 +42658,9 @@ function RandomMixApp({ onBack }) {
     setCurrentTopic(topic)
     try {
       const diff = DIFF_LEVELS[Math.min(getTopicDiff(topic.key), DIFF_LEVELS.length - 1)]
-      const r = await fetch(`${API}/${topic.api}/question?difficulty=${diff}`)
+      const r = await fetch(`${API}/${topic.api}/question?difficulty=${diff}&goal=${sessionGoal}`, {
+        headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }
+      })
       const data = await r.json()
       setQuestion(data)
       setAnswer('')
@@ -42030,7 +42671,7 @@ function RandomMixApp({ onBack }) {
       advancedRef.current = false
       setQuestionNumber(n => n + 1)
       timer.reset()
-      timer.start()
+      timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(diff, true))
     } catch {
       setFeedback('Failed to load question. Trying another topic...')
       // Try again with a different topic
@@ -42048,14 +42689,34 @@ function RandomMixApp({ onBack }) {
     try {
       const payload = { ...question, userAnswer: answer.trim() }
       const r = await fetch(`${API}/${currentTopic.api}/check`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : ''
+        },
+        body: JSON.stringify({ ...payload, sessionGoal })
       })
       const data = await r.json()
       const correct = data.correct
       setIsCorrect(correct)
       setRevealed(true)
-      setFeedback(correct ? `Correct! ${data.display}` : `Incorrect. Answer: ${data.display}`)
+      const coinMsg = (data.lil?.coinsEarned ?? 0) > 0 ? ` (+${data.lil.coinsEarned}🪙)` : ''
+
+      if (!correct && sessionGoal === 'perfect') {
+        setFeedback(`❌ Wrong answer — Perfect Solve ended! Correct: ${data.display || ''}`)
+        timer.reset()
+        setPhase('finished')
+        setResults(prev => [...prev, {
+          question: `[${currentTopic.name}] ${getPromptForType(currentTopic.key, question) || question.prompt || '?'}`,
+          userAnswer: answer.trim(),
+          correctAnswer: data.display,
+          correct: false,
+          time: elapsed
+        }])
+        return
+      }
+
+      setFeedback(correct ? `Correct!${coinMsg} ${data.display}` : `Incorrect. Answer: ${data.display}`)
 
       if (correct) {
         setScore(s => s + 1)
@@ -42134,14 +42795,26 @@ function RandomMixApp({ onBack }) {
   const handleSkip = () => {
     if (!question || revealed) return
     submittedRef.current = true
-    timer.stop()
+    const elapsed = timer.stop()
     setIsCorrect(false); setRevealed(true); setStreak(s => Math.min(s, 0) - 1)
+    if (currentTopic) setTopicDiff(currentTopic.key, d => d - 1)
+
+    if (sessionGoal === 'perfect') {
+      setFeedback('❌ Skipped — Perfect Solve ended!')
+      timer.reset()
+      setPhase('finished')
+      setResults(prev => [...prev, {
+        question: `[${currentTopic?.name || '?'}] ${getPromptForType(currentTopic?.key, question) || question.prompt || '?'}`,
+        userAnswer: '(skipped)', correctAnswer: '—', correct: false, time: elapsed
+      }])
+      return
+    }
+
     setFeedback('Skipped — counted as incorrect.')
     setResults(prev => [...prev, {
       question: `[${currentTopic?.name || '?'}] ${getPromptForType(currentTopic?.key, question) || question.prompt || '?'}`,
       userAnswer: '(skipped)', correctAnswer: '—', correct: false, time: 0
     }])
-    if (currentTopic) setTopicDiff(currentTopic.key, d => d - 1)
   }
 
   const reportDifficulty = (wasDifficult) => {
@@ -42167,8 +42840,12 @@ function RandomMixApp({ onBack }) {
     try {
       const payload = { ...question, userAnswer: '', solve: true }
       const r = await fetch(`${API}/${currentTopic.api}/check`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : ''
+        },
+        body: JSON.stringify({ ...payload, sessionGoal })
       })
       const data = await r.json()
       setIsCorrect(false); setRevealed(true)
@@ -42199,29 +42876,64 @@ function RandomMixApp({ onBack }) {
   // ─── Setup Phase ─────────────────────────────────
   if (phase === 'setup') {
     return (
-      <div className="app-card" style={{ maxWidth: 520, margin: '0 auto' }}>
-        <button className="back-button" onClick={onBack}>← Back</button>
-        <h2 style={{ margin: '0.5rem 0' }}>Random Mix</h2>
-        <p style={{ color: 'var(--color-text-dim)', margin: '0.3rem 0 1rem' }}>
-          Adaptive cross-topic quiz. Questions come from random topics and difficulty adjusts to your level.
-          You can skip any topic you don't want to see.
-        </p>
-        <div style={{ marginBottom: '1rem' }}>
-          <label style={{ fontWeight: 600 }}>Number of questions: </label>
-          <input type="number" value={numQInput} onChange={e => setNumQInput(e.target.value)}
-            style={{ width: 70, padding: '0.3rem 0.5rem', borderRadius: 8, border: '1px solid var(--color-border)', background: 'var(--color-surface)', color: 'var(--color-text)' }}
-            min={5} max={100} />
+      <QuizLayout title="Random Mix" subtitle="Adaptive cross-topic quiz" onBack={onBack}>
+        <div className="welcome-box">
+          <p className="welcome-text">
+            Questions come from random topics and difficulty adjusts to your level.
+            You can skip any topic you don't want to see.
+          </p>
+          <div className="question-count-row" style={{ marginBottom: '12px' }}>
+            <label className="question-count-label">Number of questions: </label>
+            <input className="answer-input question-count-input" type="text" value={numQInput} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQInput(v) }} />
+          </div>
+
+          <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+          <div className="checkbox-group" style={{ marginBottom: '8px' }}>
+            {[
+              { key: 'standard', label: 'Standard' },
+              { key: 'speed',    label: '⚡ Speed Run' },
+              { key: 'perfect',  label: '🎯 Perfect Solve' },
+              { key: 'revision', label: '🔄 Revision' },
+            ].map(g => (
+              <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+                style={sessionGoal === g.key ? (
+                  g.key === 'speed'    ? { background: 'rgba(255,179,0,0.18)',  borderColor: '#ffb300', color: '#ffb300' } :
+                  g.key === 'perfect'  ? { background: 'rgba(244,67,54,0.18)',  borderColor: '#f44336', color: '#f44336' } :
+                  g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+                ) : {}}>
+                <input type="radio" name="randommix-goal" checked={sessionGoal === g.key}
+                  onChange={() => setSessionGoal(g.key)} />
+                {g.label}
+              </label>
+            ))}
+          </div>
+          {sessionGoal === 'speed' && (
+            <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+              ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+            </p>
+          )}
+          {sessionGoal === 'perfect' && (
+            <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+              🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+            </p>
+          )}
+          {sessionGoal === 'revision' && (
+            <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+              🔄 Focuses on topics you previously answered incorrectly.
+            </p>
+          )}
+
+          <p style={{ color: 'var(--clr-dim)', fontSize: '0.82rem', marginBottom: '1rem', marginTop: '12px' }}>
+            Starts at <strong style={{ color: '#4caf50' }}>Easy</strong>.
+            3 correct in a row → level up.
+            2 wrong in a row → level down.
+            Topics drawn randomly from all {RANDOM_MIX_TOPICS.length} puzzles.
+          </p>
+          <div className="button-row">
+            <button onClick={startQuiz}>Start Random Mix</button>
+          </div>
         </div>
-        <p style={{ color: 'var(--color-text-dim)', fontSize: '0.85rem', marginBottom: '1rem' }}>
-          Starts at <strong style={{ color: DIFF_COLORS.easy }}>Easy</strong>.
-          3 correct in a row → level up.
-          2 wrong in a row → level down.
-          Topics drawn randomly from all {RANDOM_MIX_TOPICS.length} puzzles.
-        </p>
-        <button className="submit-btn" onClick={startQuiz} style={{ width: '100%', fontSize: '1.1rem' }}>
-          Start Random Mix
-        </button>
-      </div>
+      </QuizLayout>
     )
   }
 
@@ -42230,77 +42942,70 @@ function RandomMixApp({ onBack }) {
     const pct = totalQuestions > 0 ? Math.round((score / totalQuestions) * 100) : 0
     const topicEntries = Object.values(topicStats).sort((a, b) => b.total - a.total)
     return (
-      <div className="app-card" style={{ maxWidth: 620, margin: '0 auto' }}>
-        <button className="back-button" onClick={onBack}>← Back</button>
-        <h2>Random Mix — Results</h2>
-        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', margin: '1rem 0' }}>
-          <div className="stat-pill">{score}/{totalQuestions} correct ({pct}%)</div>
-          <div className="stat-pill">Ended at {DIFF_LABELS[currentDifficulty()]} level</div>
-          <div className="stat-pill">{Object.keys(topicStats).length} topics covered</div>
-        </div>
-        {topicEntries.length > 0 && (
-          <div style={{ margin: '1rem 0' }}>
-            <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>Topic Breakdown</h3>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
-              {topicEntries.map(t => (
-                <span key={t.name} style={{
-                  padding: '0.25rem 0.6rem', borderRadius: 12, fontSize: '0.82rem',
-                  background: t.correct === t.total ? 'var(--color-correct-bg)' : t.correct === 0 ? 'var(--color-wrong-bg)' : 'var(--color-surface-alt)',
-                  color: 'var(--color-text)'
-                }}>
-                  {t.name}: {t.correct}/{t.total}
-                </span>
-              ))}
-            </div>
+      <QuizLayout title="Random Mix" subtitle="Quiz complete!" onBack={onBack}>
+        <div className="welcome-box">
+          <p className="final-score">Final score: {score}/{totalQuestions} ({pct}%)</p>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center', marginBottom: '1rem' }}>
+            <span className="stat-pill">Ended at {DIFF_LABELS[currentDifficulty()]} level</span>
+            <span className="stat-pill">{Object.keys(topicStats).length} topics covered</span>
           </div>
-        )}
-        <ResultsTable results={results} />
-        <button className="submit-btn" onClick={() => setPhase('setup')} style={{ width: '100%', marginTop: '1rem' }}>
-          Play Again
-        </button>
-      </div>
+
+          {topicEntries.length > 0 && (
+            <div style={{ margin: '1rem 0' }}>
+              <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem', fontWeight: 600 }}>Topic Breakdown</h3>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', justifyContent: 'center' }}>
+                {topicEntries.map(t => (
+                  <span key={t.name} style={{
+                    padding: '0.25rem 0.6rem', borderRadius: 12, fontSize: '0.82rem',
+                    background: t.correct === t.total ? 'rgba(76, 175, 80, 0.15)' : t.correct === 0 ? 'rgba(244, 67, 54, 0.15)' : 'var(--clr-dim-alt)',
+                    border: '1px solid ' + (t.correct === t.total ? '#4caf50' : t.correct === 0 ? '#f44336' : 'var(--clr-dim)'),
+                    color: t.correct === t.total ? '#4caf50' : t.correct === 0 ? '#f44336' : 'var(--clr-text-soft)'
+                  }}>
+                    {t.name}: {t.correct}/{t.total}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          <ResultsTable results={results} />
+          <button onClick={() => setPhase('setup')} style={{ marginTop: '1rem' }}>
+            Play Again
+          </button>
+        </div>
+      </QuizLayout>
     )
   }
 
   // ─── Playing Phase ───────────────────────────────
   const diff = currentDifficulty()
   return (
-    <div className="app-card" style={{ maxWidth: 620, margin: '0 auto' }}>
-      <button className="back-button" onClick={onBack}>← Back</button>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem', marginBottom: '0.5rem' }}>
-        <h2 style={{ margin: 0, fontSize: '1.15rem' }}>Random Mix</h2>
-        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-          <span className="stat-pill">Q{questionNumber}/{totalQuestions}</span>
-          <span className="stat-pill" style={{ background: DIFF_COLORS[diff], color: '#fff' }}>{DIFF_LABELS[diff]}</span>
-          <span className="stat-pill">{score} correct</span>
-        </div>
+    <QuizLayout title="Random Mix" subtitle={`Topic: ${currentTopic?.name || ''}`} onBack={onBack} timer={sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
+      <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.3rem' }}>
+        <div className="progress-pill center">Question {questionNumber}/{totalQuestions}</div>
+        <div className="progress-pill" style={{ background: DIFF_COLORS[diff], color: '#fff' }}>{DIFF_LABELS[diff]}</div>
+        <div className="progress-pill">{score} correct</div>
       </div>
 
-      {currentTopic && (
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
-          <span style={{ fontWeight: 600, color: 'var(--color-primary)', fontSize: '0.95rem' }}>
-            Topic: {currentTopic.name}
-          </span>
-          {!revealed && (
-            <button onClick={skipTopic} style={{
-              background: 'none', border: '1px solid var(--color-border)', borderRadius: 8,
-              padding: '0.2rem 0.6rem', fontSize: '0.78rem', color: 'var(--color-text-dim)',
-              cursor: 'pointer'
-            }}>
-              Skip this topic
-            </button>
-          )}
+      {!revealed && currentTopic && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.6rem' }}>
+          <button onClick={skipTopic} style={{
+            background: 'none', border: '1px solid var(--clr-dim)', borderRadius: 8,
+            padding: '0.2rem 0.6rem', fontSize: '0.78rem', color: 'var(--clr-dim)',
+            cursor: 'pointer'
+          }}>
+            Skip this topic
+          </button>
         </div>
       )}
 
       {skippedTopics.size > 0 && (
-        <div style={{ marginBottom: '0.6rem', fontSize: '0.78rem', color: 'var(--color-text-dim)' }}>
+        <div style={{ marginBottom: '0.6rem', fontSize: '0.78rem', color: 'var(--clr-dim)', textAlign: 'center' }}>
           Skipped: {[...skippedTopics].map(k => {
             const t = RANDOM_MIX_TOPICS.find(x => x.key === k)
             return (
               <span key={k} onClick={() => unskipTopic(k)} style={{
                 display: 'inline-block', padding: '0.1rem 0.45rem', margin: '0.1rem', borderRadius: 8,
-                background: 'var(--color-surface-alt)', cursor: 'pointer', textDecoration: 'line-through'
+                background: 'var(--clr-dim-alt)', cursor: 'pointer', textDecoration: 'line-through'
               }}>
                 {t ? t.name : k} ✕
               </span>
@@ -42309,11 +43014,11 @@ function RandomMixApp({ onBack }) {
         </div>
       )}
 
-      {loading && <p style={{ textAlign: 'center', padding: '2rem 0' }}>Loading…</p>}
+      {loading && <p style={{ textAlign: 'center', padding: '2rem 0' }}>Loading question…</p>}
 
       {!loading && question && (
         <>
-          <div className="question-prompt" style={{ whiteSpace: 'pre-wrap', margin: '0.5rem 0 1rem', fontSize: '1.1rem', lineHeight: 1.5 }}>
+          <div className="question-box">
             {getPromptForType(currentTopic.key, question) || question.prompt || ''}
           </div>
 
@@ -42329,15 +43034,16 @@ function RandomMixApp({ onBack }) {
               style={{ flex: 1 }}
               autoFocus
             />
-            {!revealed && (
+          </div>
+          <div className="button-row">
+            {!revealed ? (
               <>
-                <button className="submit-btn" onClick={handleSubmit} disabled={answer.trim() === ''}>Submit</button>
-                <button className="submit-btn" onClick={handleSolve} style={{ background: 'transparent', border: '1px solid var(--clr-accent)', color: 'var(--clr-accent)' }}>Solve</button>
-                <button className="submit-btn" onClick={handleSkip} style={{ background: 'transparent', border: '1px solid var(--clr-text-soft)', color: 'var(--clr-text-soft)' }}>Skip</button>
+                <button onClick={handleSubmit} disabled={answer.trim() === ''}>Submit</button>
+                <button onClick={handleSolve} style={{ background: 'transparent', border: '1px solid var(--clr-accent)', color: 'var(--clr-accent)' }}>Solve</button>
+                <button onClick={handleSkip} style={{ background: 'transparent', border: '1px solid var(--clr-dim)', color: 'var(--clr-dim)' }}>Skip</button>
               </>
-            )}
-            {revealed && (
-              <button className="submit-btn" onClick={advance}>
+            ) : (
+              <button onClick={advance}>
                 {questionNumber >= totalQuestions ? 'Finish' : 'Next'}
               </button>
             )}
@@ -42345,7 +43051,7 @@ function RandomMixApp({ onBack }) {
 
           {/* Always-visible Easy/Difficult self-report buttons */}
           <div style={{ textAlign: 'center', margin: '10px 0 4px' }}>
-            <span style={{ fontSize: '0.75rem', color: 'var(--clr-text-soft)', marginRight: '8px' }}>How are you feeling?</span>
+            <span style={{ fontSize: '0.75rem', color: 'var(--clr-dim)', marginRight: '8px' }}>How are you feeling?</span>
             <button onClick={() => reportDifficulty(false)} style={{ fontSize: '0.78rem', padding: '5px 14px', borderRadius: '8px', marginRight: '6px', background: 'transparent', border: '1px solid var(--clr-correct)', color: 'var(--clr-correct)', cursor: 'pointer' }}>Too Easy</button>
             <button onClick={() => reportDifficulty(true)} style={{ fontSize: '0.78rem', padding: '5px 14px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--clr-wrong)', color: 'var(--clr-wrong)', cursor: 'pointer' }}>Too Hard</button>
           </div>
@@ -42354,7 +43060,7 @@ function RandomMixApp({ onBack }) {
           {renderFeedback(feedback, isCorrect)}
 
           {revealed && isCorrect !== null && (
-            <div style={{ fontSize: '0.8rem', color: 'var(--color-text-dim)', marginTop: '0.3rem' }}>
+            <div style={{ fontSize: '0.8rem', color: 'var(--clr-dim)', marginTop: '0.3rem', textAlign: 'center' }}>
               {isCorrect ? (
                 streak >= 2 && getTopicDiff(currentTopic?.key) < DIFF_LEVELS.length - 1
                   ? `🔥 ${streak} in a row! Levelling up next…`
@@ -42368,7 +43074,8 @@ function RandomMixApp({ onBack }) {
           )}
         </>
       )}
-    </div>
+      {results.length > 0 && <ResultsTable results={results} />}
+    </QuizLayout>
   )
 }
 
@@ -42391,17 +43098,38 @@ function SetsApp({ onBack }) {
   const [loading, setLoading] = useState(false)
   const [revealed, setRevealed] = useState(false)
   const [results, setResults] = useState([])
+  const [sessionGoal, setSessionGoal] = useState('standard')
   const timer = useTimer()
   const advanceFnRef = useRef(null)
   const advancedRef = useRef(false)
   const submittedRef = useRef(false)
 
-  const effectiveDiff = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
+  const effectiveDiff = () => (isAdaptive) ? adaptiveLevel(adaptScoreRef.current) : difficulty
 
-  const loadQuestion = async () => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/sets-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const loadQuestion = async () => {
     setLoading(true)
     try {
-      const r = await fetch(`${API}/sets-api/question?difficulty=${effectiveDiff()}`)
+      const r = await fetch(`${API}/sets-api/question?difficulty=${effectiveDiff()}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
       const data = await r.json()
       setQuestion(data)
       setAnswer('')
@@ -42410,7 +43138,7 @@ function SetsApp({ onBack }) {
       setRevealed(false)
       submittedRef.current = false
       advancedRef.current = false
-      timer.start()
+      timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
     } catch (e) { console.error('Failed to load sets question:', e) }
     setLoading(false)
   }
@@ -42441,11 +43169,21 @@ function SetsApp({ onBack }) {
     const timeTaken = timer.stop()
     const payload = { ...question, userAnswer: answer.trim() }
     try {
-      const r = await fetch(`${API}/sets-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      const r = await fetch(`${API}/sets-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({ ...payload, sessionGoal }) })
       const data = await r.json()
       setIsCorrect(data.correct); setRevealed(true)
       if (data.correct) setScore(s => s + 1)
-      setFeedback(data.correct ? `Correct! ${data.display}` : `Incorrect. Answer: ${data.display}`)
+      (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${data.display}`.slice(0,-1) + _ci + `Correct! ${data.display}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. Answer: ${data.display}` + ' ❌ Perfect Solve ended.')
+          setFinished(true); timer.reset()
+        } else {
+          setFeedback(`Incorrect. Answer: ${data.display}`)
+        }
+      })()
       setResults(prev => [...prev, { prompt: question.prompt, userAnswer: answer.trim(), correctAnswer: data.display, correct: data.correct, time: timeTaken }])
       if (isAdaptive) {
         setAdaptScore(prev => { const next = data.correct ? Math.min(3, prev + 0.25) : Math.max(0, prev - 0.35); adaptScoreRef.current = next; return next })
@@ -42458,11 +43196,7 @@ function SetsApp({ onBack }) {
     submittedRef.current = true
     timer.stop()
     try {
-      const r = await fetch(`${API}/sets-api/check`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...question, userAnswer: '', solve: true }),
-      })
+      const r = await fetch(`${API}/sets-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  ...question, userAnswer: '', solve: true, sessionGoal }) })
       const data = await r.json()
       setIsCorrect(false); setRevealed(true)
       const display = data.display || data.correctAnswer || data.answer || ''
@@ -42480,7 +43214,7 @@ function SetsApp({ onBack }) {
   const curAdaptLevel = adaptiveLevel(adaptScore)
 
   return (
-    <QuizLayout title="Sets" subtitle="Union, intersection, Venn diagrams" onBack={onBack} timer={started && !finished ? timer : null}>
+    <QuizLayout title="Sets" subtitle="Union, intersection, Venn diagrams" onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
       {!started && !finished && <div className="welcome-box">
         <p className="welcome-text">Practice sets and Venn diagrams!</p>
         <p style={{ fontSize: '0.85rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>For listing elements, type like: 1, 3, 5 or {'{'}1, 3, 5{'}'}</p>
@@ -42496,7 +43230,45 @@ function SetsApp({ onBack }) {
             Adaptive
           </label>
         </div>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="setsapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
         {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Starts easy and smoothly adjusts to your level as you answer.</p>}
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} />
@@ -42552,19 +43324,40 @@ function SequencesApp({ onBack }) {
   const [loading, setLoading] = useState(false)
   const [revealed, setRevealed] = useState(false)
   const [results, setResults] = useState([])
+  const [sessionGoal, setSessionGoal] = useState('standard')
   const timer = useTimer()
   const advanceFnRef = useRef(null)
   const advancedRef = useRef(false)
   const submittedRef = useRef(false)
 
-  const effectiveDiff = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
+  const effectiveDiff = () => (isAdaptive) ? adaptiveLevel(adaptScoreRef.current) : difficulty
 
-  const loadQuestion = async () => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/sequences-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const loadQuestion = async () => {
     setLoading(true)
     try {
-      const r = await fetch(`${API}/sequences-api/question?difficulty=${effectiveDiff()}`)
+      const r = await fetch(`${API}/sequences-api/question?difficulty=${effectiveDiff()}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
       const data = await r.json()
-      setQuestion(data); setAnswer(''); setFeedback(''); setIsCorrect(null); setRevealed(false); submittedRef.current = false; advancedRef.current = false; timer.start()
+      setQuestion(data); setAnswer(''); setFeedback(''); setIsCorrect(null); setRevealed(false); submittedRef.current = false; advancedRef.current = false; timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
     } catch (e) { console.error('Failed to load sequences question:', e) }
     setLoading(false)
   }
@@ -42595,11 +43388,21 @@ function SequencesApp({ onBack }) {
     const timeTaken = timer.stop()
     const payload = { ...question, answer: answer.trim() }
     try {
-      const r = await fetch(`${API}/sequences-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      const r = await fetch(`${API}/sequences-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({ ...payload, sessionGoal }) })
       const data = await r.json()
       setIsCorrect(data.correct); setRevealed(true)
       if (data.correct) setScore(s => s + 1)
-      setFeedback(data.correct ? `Correct! Answer: ${data.display}` : `Incorrect. Answer: ${data.display}`)
+      (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! Answer: ${data.display}`.slice(0,-1) + _ci + `Correct! Answer: ${data.display}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. Answer: ${data.display}` + ' ❌ Perfect Solve ended.')
+          setFinished(true); timer.reset()
+        } else {
+          setFeedback(`Incorrect. Answer: ${data.display}`)
+        }
+      })()
       setResults(prev => [...prev, { prompt: question.prompt, userAnswer: answer.trim(), correctAnswer: data.display, correct: data.correct, time: timeTaken }])
       if (isAdaptive) {
         setAdaptScore(prev => { const next = data.correct ? Math.min(3, prev + 0.25) : Math.max(0, prev - 0.35); adaptScoreRef.current = next; return next })
@@ -42612,11 +43415,7 @@ function SequencesApp({ onBack }) {
     submittedRef.current = true
     timer.stop()
     try {
-      const r = await fetch(`${API}/sequences-api/check`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...question, answer: '', solve: true }),
-      })
+      const r = await fetch(`${API}/sequences-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  ...question, answer: '', solve: true, sessionGoal }) })
       const data = await r.json()
       setIsCorrect(false); setRevealed(true)
       const display = data.display || data.correctAnswer || data.answer || ''
@@ -42634,7 +43433,7 @@ function SequencesApp({ onBack }) {
   const curAdaptLevel = adaptiveLevel(adaptScore)
 
   return (
-    <QuizLayout title="Sequences & Series" subtitle="Arithmetic & geometric" onBack={onBack} timer={started && !finished ? timer : null}>
+    <QuizLayout title="Sequences & Series" subtitle="Arithmetic & geometric" onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
       {!started && !finished && <div className="welcome-box">
         <p className="welcome-text">Practice sequences and series!</p>
         <div className="checkbox-group" style={{ marginBottom: '12px' }}>
@@ -42649,7 +43448,45 @@ function SequencesApp({ onBack }) {
             Adaptive
           </label>
         </div>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="sequencesapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
         {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Starts easy and smoothly adjusts to your level as you answer.</p>}
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} />
@@ -42705,17 +43542,38 @@ function RatioApp({ onBack }) {
   const [loading, setLoading] = useState(false)
   const [revealed, setRevealed] = useState(false)
   const [results, setResults] = useState([])
+  const [sessionGoal, setSessionGoal] = useState('standard')
   const timer = useTimer()
   const advanceFnRef = useRef(null)
   const advancedRef = useRef(false)
   const submittedRef = useRef(false)
 
-  const effectiveDiff = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
+  const effectiveDiff = () => (isAdaptive) ? adaptiveLevel(adaptScoreRef.current) : difficulty
 
-  const loadQuestion = async () => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/ratio-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const loadQuestion = async () => {
     setLoading(true)
     try {
-      const r = await fetch(`${API}/ratio-api/question?difficulty=${effectiveDiff()}`)
+      const r = await fetch(`${API}/ratio-api/question?difficulty=${effectiveDiff()}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
       const data = await r.json()
       setQuestion(data)
       setAnswer('')
@@ -42724,7 +43582,7 @@ function RatioApp({ onBack }) {
       setRevealed(false)
       submittedRef.current = false
       advancedRef.current = false
-      timer.start()
+      timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
     } catch (e) { console.error('Failed to load ratio question:', e) }
     setLoading(false)
   }
@@ -42761,12 +43619,22 @@ function RatioApp({ onBack }) {
     const timeTaken = timer.stop()
     const payload = { ...question, answer: answer.trim() }
     try {
-      const r = await fetch(`${API}/ratio-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      const r = await fetch(`${API}/ratio-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({ ...payload, sessionGoal }) })
       const data = await r.json()
       setIsCorrect(data.correct)
       setRevealed(true)
       if (data.correct) setScore(s => s + 1)
-      setFeedback(data.correct ? `Correct! ${data.display}` : `Incorrect. Answer: ${data.display}`)
+      (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${data.display}`.slice(0,-1) + _ci + `Correct! ${data.display}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. Answer: ${data.display}` + ' ❌ Perfect Solve ended.')
+          setFinished(true); timer.reset()
+        } else {
+          setFeedback(`Incorrect. Answer: ${data.display}`)
+        }
+      })()
       setResults(prev => [...prev, { prompt: question.prompt, userAnswer: answer.trim(), correctAnswer: data.display, correct: data.correct, time: timeTaken }])
       if (isAdaptive) {
         setAdaptScore(prev => { const next = data.correct ? Math.min(3, prev + 0.25) : Math.max(0, prev - 0.35); adaptScoreRef.current = next; return next })
@@ -42779,11 +43647,7 @@ function RatioApp({ onBack }) {
     submittedRef.current = true
     timer.stop()
     try {
-      const r = await fetch(`${API}/ratio-api/check`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...question, answer: '', solve: true }),
-      })
+      const r = await fetch(`${API}/ratio-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  ...question, answer: '', solve: true, sessionGoal }) })
       const data = await r.json()
       setIsCorrect(false); setRevealed(true)
       const display = data.display || data.correctAnswer || data.answer || ''
@@ -42803,7 +43667,7 @@ function RatioApp({ onBack }) {
   const curAdaptLevel = adaptiveLevel(adaptScore)
 
   return (
-    <QuizLayout title="Ratio & Proportion" subtitle="Simplify, divide, direct & inverse" onBack={onBack} timer={started && !finished ? timer : null}>
+    <QuizLayout title="Ratio & Proportion" subtitle="Simplify, divide, direct & inverse" onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
       {!started && !finished && <div className="welcome-box">
         <p className="welcome-text">Practice ratio and proportion!</p>
         <div className="checkbox-group" style={{ marginBottom: '12px' }}>
@@ -42818,7 +43682,45 @@ function RatioApp({ onBack }) {
             Adaptive
           </label>
         </div>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="ratioapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
         {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Starts easy and smoothly adjusts to your level as you answer.</p>}
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} />
@@ -42874,17 +43776,38 @@ function PercentApp({ onBack }) {
   const [loading, setLoading] = useState(false)
   const [revealed, setRevealed] = useState(false)
   const [results, setResults] = useState([])
+  const [sessionGoal, setSessionGoal] = useState('standard')
   const timer = useTimer()
   const advanceFnRef = useRef(null)
   const advancedRef = useRef(false)
   const submittedRef = useRef(false)
 
-  const effectiveDiff = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
+  const effectiveDiff = () => (isAdaptive) ? adaptiveLevel(adaptScoreRef.current) : difficulty
 
-  const loadQuestion = async () => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/percent-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const loadQuestion = async () => {
     setLoading(true)
     try {
-      const r = await fetch(`${API}/percent-api/question?difficulty=${effectiveDiff()}`)
+      const r = await fetch(`${API}/percent-api/question?difficulty=${effectiveDiff()}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
       const data = await r.json()
       setQuestion(data)
       setAnswer('')
@@ -42893,7 +43816,7 @@ function PercentApp({ onBack }) {
       setRevealed(false)
       submittedRef.current = false
       advancedRef.current = false
-      timer.start()
+      timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
     } catch (e) { console.error('Failed to load percent question:', e) }
     setLoading(false)
   }
@@ -42930,12 +43853,22 @@ function PercentApp({ onBack }) {
     const timeTaken = timer.stop()
     const payload = { ...question, userAnswer: answer.trim().replace(/[$,]/g, '') }
     try {
-      const r = await fetch(`${API}/percent-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      const r = await fetch(`${API}/percent-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({ ...payload, sessionGoal }) })
       const data = await r.json()
       setIsCorrect(data.correct)
       setRevealed(true)
       if (data.correct) setScore(s => s + 1)
-      setFeedback(data.correct ? `Correct! ${data.display}` : `Incorrect. Answer: ${data.display}`)
+      (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${data.display}`.slice(0,-1) + _ci + `Correct! ${data.display}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. Answer: ${data.display}` + ' ❌ Perfect Solve ended.')
+          setFinished(true); timer.reset()
+        } else {
+          setFeedback(`Incorrect. Answer: ${data.display}`)
+        }
+      })()
       setResults(prev => [...prev, { prompt: question.prompt, userAnswer: answer.trim(), correctAnswer: data.display, correct: data.correct, time: timeTaken }])
       if (isAdaptive) {
         setAdaptScore(prev => { const next = data.correct ? Math.min(3, prev + 0.25) : Math.max(0, prev - 0.35); adaptScoreRef.current = next; return next })
@@ -42948,11 +43881,7 @@ function PercentApp({ onBack }) {
     submittedRef.current = true
     timer.stop()
     try {
-      const r = await fetch(`${API}/percent-api/check`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...question, userAnswer: '', solve: true }),
-      })
+      const r = await fetch(`${API}/percent-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  ...question, userAnswer: '', solve: true, sessionGoal }) })
       const data = await r.json()
       setIsCorrect(false); setRevealed(true)
       const display = data.display || data.correctAnswer || data.answer || ''
@@ -42971,7 +43900,7 @@ function PercentApp({ onBack }) {
   const curAdaptLevel = adaptiveLevel(adaptScore)
 
   return (
-    <QuizLayout title="Percentages" subtitle="Find, increase, reverse, compound" onBack={onBack} timer={started && !finished ? timer : null}>
+    <QuizLayout title="Percentages" subtitle="Find, increase, reverse, compound" onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
       {!started && !finished && <div className="welcome-box">
         <p className="welcome-text">Practice percentages!</p>
         <div className="checkbox-group" style={{ marginBottom: '12px' }}>
@@ -42986,7 +43915,45 @@ function PercentApp({ onBack }) {
             Adaptive
           </label>
         </div>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="percentapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
         {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Starts easy and smoothly adjusts to your level as you answer.</p>}
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} />
@@ -43053,22 +44020,43 @@ function IndicesApp({ onBack }) {
   const [loading, setLoading] = useState(false)
   const [revealed, setRevealed] = useState(false)
   const [results, setResults] = useState([])
+  const [sessionGoal, setSessionGoal] = useState('standard')
   const timer = useTimer()
   const advanceFnRef = useRef(null)
 
-  const effectiveDiff = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
+  const effectiveDiff = () => (isAdaptive) ? adaptiveLevel(adaptScoreRef.current) : difficulty
 
-  const loadQuestion = async () => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/indices-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const loadQuestion = async () => {
     setLoading(true)
     try {
-      const r = await fetch(`${API}/indices-api/question?difficulty=${effectiveDiff()}`)
+      const r = await fetch(`${API}/indices-api/question?difficulty=${effectiveDiff()}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
       const data = await r.json()
       setQuestion(data)
       setAnswer('')
       setFeedback('')
       setIsCorrect(null)
       setRevealed(false)
-      timer.start()
+      timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
     } catch (e) { console.error('Failed to load indices question:', e) }
     setLoading(false)
   }
@@ -43109,20 +44097,24 @@ function IndicesApp({ onBack }) {
 
     const payload = { ...question, answer: answer.trim() }
     try {
-      const r = await fetch(`${API}/indices-api/check`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      })
+      const r = await fetch(`${API}/indices-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({ ...payload, sessionGoal }) })
       const data = await r.json()
       setIsCorrect(data.correct)
       setRevealed(true)
       if (data.correct) setScore(s => s + 1)
 
       const prompt = question.prompt
-      setFeedback(data.correct
-        ? `Correct! ${prompt} = ${data.display}`
-        : `Incorrect. ${prompt} = ${data.display}`)
+      (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${prompt} = ${data.display}`.slice(0,-1) + _ci + `Correct! ${prompt} = ${data.display}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. ${prompt} = ${data.display}` + ' ❌ Perfect Solve ended.')
+          setFinished(true); timer.reset()
+        } else {
+          setFeedback(`Incorrect. ${prompt} = ${data.display}`)
+        }
+      })()
 
       setResults(prev => [...prev, {
         prompt,
@@ -43141,11 +44133,7 @@ function IndicesApp({ onBack }) {
     if (!question || revealed) return
     timer.stop()
     try {
-      const r = await fetch(`${API}/indices-api/check`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...question, answer: '', solve: true }),
-      })
+      const r = await fetch(`${API}/indices-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  ...question, answer: '', solve: true, sessionGoal }) })
       const data = await r.json()
       setIsCorrect(false); setRevealed(true)
       const display = data.display || data.correctAnswer || data.answer || ''
@@ -43172,7 +44160,7 @@ function IndicesApp({ onBack }) {
   const curAdaptLevel = adaptiveLevel(adaptScore)
 
   return (
-    <QuizLayout title="Indices" subtitle="Laws of exponents" onBack={onBack} timer={started && !finished ? timer : null}>
+    <QuizLayout title="Indices" subtitle="Laws of exponents" onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
       {!started && !finished && <div className="welcome-box">
         <p className="welcome-text">Practice laws of indices!</p>
         <div className="checkbox-group" style={{ marginBottom: '12px' }}>
@@ -43187,7 +44175,45 @@ function IndicesApp({ onBack }) {
             Adaptive
           </label>
         </div>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="indicesapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
         {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Starts easy and smoothly adjusts to your level as you answer.</p>}
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} />
@@ -43275,22 +44301,43 @@ function SurdsApp({ onBack }) {
   const [loading, setLoading] = useState(false)
   const [revealed, setRevealed] = useState(false)
   const [results, setResults] = useState([])
+  const [sessionGoal, setSessionGoal] = useState('standard')
   const timer = useTimer()
   const advanceFnRef = useRef(null)
 
-  const effectiveDiff = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
+  const effectiveDiff = () => (isAdaptive) ? adaptiveLevel(adaptScoreRef.current) : difficulty
 
-  const loadQuestion = async () => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/surds-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const loadQuestion = async () => {
     setLoading(true)
     try {
-      const r = await fetch(`${API}/surds-api/question?difficulty=${effectiveDiff()}`)
+      const r = await fetch(`${API}/surds-api/question?difficulty=${effectiveDiff()}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
       const data = await r.json()
       setQuestion(data)
       setAnswer('')
       setFeedback('')
       setIsCorrect(null)
       setRevealed(false)
-      timer.start()
+      timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
     } catch (e) { console.error('Failed to load surds question:', e) }
     setLoading(false)
   }
@@ -43364,20 +44411,24 @@ function SurdsApp({ onBack }) {
     const payload = { ...question, answer: normalized }
 
     try {
-      const r = await fetch(`${API}/surds-api/check`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      })
+      const r = await fetch(`${API}/surds-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({ ...payload, sessionGoal }) })
       const data = await r.json()
       setIsCorrect(data.correct)
       setRevealed(true)
       if (data.correct) setScore(s => s + 1)
 
       const prompt = getPrompt(question)
-      setFeedback(data.correct
-        ? `Correct! ${prompt} = ${data.display}`
-        : `Incorrect. ${prompt} = ${data.display}`)
+      (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${prompt} = ${data.display}`.slice(0,-1) + _ci + `Correct! ${prompt} = ${data.display}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. ${prompt} = ${data.display}` + ' ❌ Perfect Solve ended.')
+          setFinished(true); timer.reset()
+        } else {
+          setFeedback(`Incorrect. ${prompt} = ${data.display}`)
+        }
+      })()
 
       setResults(prev => [...prev, {
         prompt,
@@ -43397,11 +44448,7 @@ function SurdsApp({ onBack }) {
     timer.stop()
     const prompt = getPrompt(question)
     try {
-      const r = await fetch(`${API}/surds-api/check`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...question, answer: '', solve: true }),
-      })
+      const r = await fetch(`${API}/surds-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  ...question, answer: '', solve: true, sessionGoal }) })
       const data = await r.json()
       setIsCorrect(false); setRevealed(true)
       const display = data.display || data.correctAnswer || data.answer || ''
@@ -43427,7 +44474,7 @@ function SurdsApp({ onBack }) {
   const curAdaptLevel = adaptiveLevel(adaptScore)
 
   return (
-    <QuizLayout title="Surds" subtitle="Simplify, add, multiply, rationalise" onBack={onBack} timer={started && !finished ? timer : null}>
+    <QuizLayout title="Surds" subtitle="Simplify, add, multiply, rationalise" onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
       {!started && !finished && <div className="welcome-box">
         <p className="welcome-text">Practice working with surds!</p>
         <p style={{ fontSize: '0.85rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Tip: type √ using "sqrt" or copy-paste √</p>
@@ -43443,7 +44490,45 @@ function SurdsApp({ onBack }) {
             Adaptive
           </label>
         </div>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="surdsapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
         {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Starts easy and smoothly adjusts to your level as you answer.</p>}
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} />
@@ -43530,29 +44615,50 @@ function FractionAddApp({ onBack }) {
   const [revealed, setRevealed] = useState(false)
   // Results log for ResultsTable
   const [results, setResults] = useState([])
+  const [sessionGoal, setSessionGoal] = useState('standard')
   // Timer for per-question timing
   const timer = useTimer()
 
   // ── Refs for auto-advance ────────────────────────────────────────────
   const advanceFnRef = useRef(null)
 
-  const effectiveDiff = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
+  const effectiveDiff = () => (isAdaptive) ? adaptiveLevel(adaptScoreRef.current) : difficulty
 
   /**
    * loadQuestion(): Fetch a new fraction-add question from the API.
    * Updates question state and resets answer fields.
    */
-  const loadQuestion = async () => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/fractionadd-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const loadQuestion = async () => {
     setLoading(true)
     try {
-      const r = await fetch(`${API}/fractionadd-api/question?difficulty=${effectiveDiff()}`)
+      const r = await fetch(`${API}/fractionadd-api/question?difficulty=${effectiveDiff()}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
       const data = await r.json()
       setQuestion(data)
       setAnswer('')
       setFeedback('')
       setIsCorrect(null)
       setRevealed(false)
-      timer.start()
+      timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
     } catch (e) {
       console.error('Failed to load fraction question:', e)
     }
@@ -43655,11 +44761,7 @@ function FractionAddApp({ onBack }) {
     }
 
     try {
-      const r = await fetch(`${API}/fractionadd-api/check`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      })
+      const r = await fetch(`${API}/fractionadd-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({ ...payload, sessionGoal }) })
       const data = await r.json()
 
       setIsCorrect(data.correct)
@@ -43670,9 +44772,17 @@ function FractionAddApp({ onBack }) {
         ? `${question.w1} ${question.n1}/${question.d1} ${op} ${question.w2} ${question.n2}/${question.d2}`
         : `${question.n1}/${question.d1} ${op} ${question.n2}/${question.d2}`
 
-      setFeedback(data.correct
-        ? `Correct! ${prompt} = ${data.display}`
-        : `Incorrect. ${prompt} = ${data.display}`)
+      (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${prompt} = ${data.display}`.slice(0,-1) + _ci + `Correct! ${prompt} = ${data.display}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. ${prompt} = ${data.display}` + ' ❌ Perfect Solve ended.')
+          setFinished(true); timer.reset()
+        } else {
+          setFeedback(`Incorrect. ${prompt} = ${data.display}`)
+        }
+      })()
 
       setResults(prev => [...prev, {
         prompt,
@@ -43697,11 +44807,7 @@ function FractionAddApp({ onBack }) {
       ? `${question.w1} ${question.n1}/${question.d1} ${op} ${question.w2} ${question.n2}/${question.d2}`
       : `${question.n1}/${question.d1} ${op} ${question.n2}/${question.d2}`
     try {
-      const r = await fetch(`${API}/fractionadd-api/check`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...question, ansNum: '', ansDen: '', solve: true })
-      })
+      const r = await fetch(`${API}/fractionadd-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  ...question, ansNum: '', ansDen: '', solve: true, sessionGoal }) })
       const data = await r.json()
       setIsCorrect(false); setRevealed(true)
       const display = data.display || data.correctAnswer || data.answer || ''
@@ -43749,7 +44855,7 @@ function FractionAddApp({ onBack }) {
 
   // ── Render ─────────────────────────────────────────────────────────────
   return (
-    <QuizLayout title="Fractions" subtitle="Add, subtract, multiply & divide fractions" onBack={onBack} timer={started && !finished ? timer : null}>
+    <QuizLayout title="Fractions" subtitle="Add, subtract, multiply & divide fractions" onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
       {/* ── Setup Phase ── */}
       {!started && !finished && <div className="welcome-box">
         <p className="welcome-text">Practice adding fractions!</p>
@@ -43765,7 +44871,45 @@ function FractionAddApp({ onBack }) {
             Adaptive
           </label>
         </div>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="fractionaddapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
         {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Starts easy and smoothly adjusts to your level as you answer.</p>}
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} />
@@ -43939,6 +45083,7 @@ function TwinHuntApp({ onBack }) {
   // Cached position arrays for left and right panels
   const [leftPositions, setLeftPositions] = useState([])
   const [rightPositions, setRightPositions] = useState([])
+  const [sessionGoal, setSessionGoal] = useState('standard')
 
   /**
    * generateRound(n): Generate a new round with n symbols per panel
@@ -43951,7 +45096,27 @@ function TwinHuntApp({ onBack }) {
    *   6. Generate random scattered positions for each panel
    * Resets feedback/reveal and starts timer for the round
    */
-  const generateRound = (n) => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/twinhunt-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const generateRound = (n) => {
     // Shuffle symbol pool and select 2n-1 unique symbols
     const pool = [...TWIN_SYMBOLS].sort(() => Math.random() - 0.5)
     const common = pool[0]  // Symbol that will appear in both panels
@@ -43979,7 +45144,7 @@ function TwinHuntApp({ onBack }) {
     setFeedback('')
     setIsCorrect(null)
     setRevealed(false)
-    timer.start()
+    timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
   }
 
   /**
@@ -44061,12 +45226,65 @@ function TwinHuntApp({ onBack }) {
       {!started && !finished && (
         <div className="welcome-box">
           <p className="welcome-text">Two panels, one match. Tap the common object!</p>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="twinhuntapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
           <div className="question-count-row">
             <label className="question-count-label">Objects per panel</label>
             <input className="answer-input question-count-input" type="text" value={count}
               onChange={(e) => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setCount(v) }}
               placeholder="5" />
           </div>
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
           <div className="question-count-row">
             <label className="question-count-label">How many rounds?</label>
             <input className="answer-input question-count-input" type="text" value={numRoundsInput}
@@ -44167,11 +45385,12 @@ function SqrtApp({ onBack }) {
   const [revealed, setRevealed] = useState(false)
   // Array of {question, userAnswer, correctAnswer, correct, time} result objects
   const [results, setResults] = useState([])
+  const [sessionGoal, setSessionGoal] = useState('standard')
   // Timer instance for tracking time per question
   const timer = useTimer()
   const advanceFnRef = useRef(null)
 
-  const effectiveDiff = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
+  const effectiveDiff = () => (isAdaptive) ? adaptiveLevel(adaptScoreRef.current) : difficulty
 
   /**
    * fetchQuestion(step): Fetch next square root question
@@ -44179,18 +45398,38 @@ function SqrtApp({ onBack }) {
    * Returns: {q: radicand, prompt: "√n"}
    * Backend calculates sqrtRounded, floorAnswer, ceilAnswer for validation
    */
-  const fetchQuestion = async (step) => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/sqrt-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const fetchQuestion = async (step) => {
     setLoading(true)
     setAnswer('')
     setFeedback('')
     setRevealed(false)
     setIsCorrect(null)
     // Fetch question for this difficulty
-    const res = await fetch(`${API}/sqrt-api/question?difficulty=${effectiveDiff()}`)
+    const res = await fetch(`${API}/sqrt-api/question?difficulty=${effectiveDiff()}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
     const data = await res.json()
     setQuestion(data)
     setLoading(false)
-    timer.start()
+    timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
   }
 
   /**
@@ -44241,19 +45480,23 @@ function SqrtApp({ onBack }) {
       if (answer === '') return
       const timeTaken = timer.stop()
       // POST to backend to validate square root answer
-      const res = await fetch(`${API}/sqrt-api/check`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ q: question.q, answer: Number(answer) }),
-      })
+      const res = await fetch(`${API}/sqrt-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  q: question.q, answer: Number(answer), sessionGoal }) })
       const data = await res.json()
       setIsCorrect(data.correct)
       if (data.correct) setScore((s) => s + 1)
       // Show floor and ceiling values for reference
       const reasoning = `√${question.q} = ${data.sqrtRounded}\n⌊${data.sqrtRounded}⌋ = ${data.floorAnswer}, ⌈${data.sqrtRounded}⌉ = ${data.ceilAnswer}`
-      setFeedback(data.correct
-        ? `Correct!\n${reasoning}`
-        : `Incorrect.\n${reasoning}\nAcceptable answers: ${data.floorAnswer} or ${data.ceilAnswer}`)
+      (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct!\n${reasoning}`.slice(0,-1) + _ci + `Correct!\n${reasoning}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect.\n${reasoning}\nAcceptable answers: ${data.floorAnswer} or ${data.ceilAnswer}` + ' ❌ Perfect Solve ended.')
+          setFinished(true); timer.reset()
+        } else {
+          setFeedback(`Incorrect.\n${reasoning}\nAcceptable answers: ${data.floorAnswer} or ${data.ceilAnswer}`)
+        }
+      })()
       setResults((prev) => [...prev, {
         question: `√${question.q}`,
         userAnswer: answer,
@@ -44301,7 +45544,7 @@ function SqrtApp({ onBack }) {
   const curAdaptLevel = adaptiveLevel(adaptScore)
 
   return (
-    <QuizLayout title="Square Root" subtitle="Floor or ceiling is accepted" onBack={onBack} timer={started && !finished ? timer : null}>
+    <QuizLayout title="Square Root" subtitle="Floor or ceiling is accepted" onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
       {!started && !finished && <div className="welcome-box">
         <p className="welcome-text">Practice square roots!</p>
         <div className="checkbox-group" style={{ marginBottom: '12px' }}>
@@ -44316,7 +45559,45 @@ function SqrtApp({ onBack }) {
             Adaptive
           </label>
         </div>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="sqrtapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
         {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Starts easy and smoothly adjusts to your level as you answer.</p>}
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} placeholder={String(DEFAULT_TOTAL)} />
@@ -44397,11 +45678,12 @@ function PolyMulApp({ onBack }) {
   const [totalQ, setTotalQ] = useState(DEFAULT_TOTAL)
   // Array of {question, userAnswer, correctAnswer, correct, time} result objects
   const [results, setResults] = useState([])
+  const [sessionGoal, setSessionGoal] = useState('standard')
   // Timer instance for tracking time per question
   const timer = useTimer()
   const advanceFnRef = useRef(null)
 
-  const effectiveDiff = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
+  const effectiveDiff = () => (isAdaptive) ? adaptiveLevel(adaptScoreRef.current) : difficulty
 
   /**
    * loadQuestion(): Fetch next polynomial multiplication question
@@ -44409,18 +45691,38 @@ function PolyMulApp({ onBack }) {
    * Returns: {p1, p2, p1Display, p2Display, productDisplay, resultDegree, correctCoeffs}
    * Initializes userCoeffs array with empty strings (one per degree)
    */
-  const loadQuestion = async () => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/polymul-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const loadQuestion = async () => {
     setLoading(true)
     setFeedback('')
     setIsCorrect(null)
     setRevealed(false)
-    const res = await fetch(`${API}/polymul-api/question?difficulty=${effectiveDiff()}`)
+    const res = await fetch(`${API}/polymul-api/question?difficulty=${effectiveDiff()}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
     const data = await res.json()
     setQuestion(data)
     // Initialize empty coefficient array for this polynomial's degree
     setUserCoeffs(new Array(data.resultDegree + 1).fill(''))
     setLoading(false)
-    timer.start()
+    timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
   }
 
   /**
@@ -44450,14 +45752,21 @@ function PolyMulApp({ onBack }) {
     if (userCoeffs.some(c => c === '')) return
     const timeTaken = timer.stop()
     // POST to backend to validate polynomial multiplication result
-    const res = await fetch(`${API}/polymul-api/check`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ p1: question.p1, p2: question.p2, userCoeffs: userCoeffs.map(Number) }),
-    })
+    const res = await fetch(`${API}/polymul-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  p1: question.p1, p2: question.p2, userCoeffs: userCoeffs.map(Number), sessionGoal }) })
     const data = await res.json()
     setIsCorrect(data.correct)
     if (data.correct) setScore(s => s + 1)
-    setFeedback(data.correct ? `Correct! ${question.productDisplay}` : `Incorrect. Answer: ${data.correctDisplay}`)
+    (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${question.productDisplay}`.slice(0,-1) + _ci + `Correct! ${question.productDisplay}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. Answer: ${data.correctDisplay}` + ' ❌ Perfect Solve ended.')
+          setFinished(true); timer.reset()
+        } else {
+          setFeedback(`Incorrect. Answer: ${data.correctDisplay}`)
+        }
+      })()
     setResults(prev => [...prev, {
       question: `(${question.p1Display})(${question.p2Display})`,
       userAnswer: userCoeffs.join(', '),
@@ -44475,11 +45784,7 @@ function PolyMulApp({ onBack }) {
     if (!question || revealed) return
     timer.stop()
     try {
-      const r = await fetch(`${API}/polymul-api/check`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ p1: question.p1, p2: question.p2, userCoeffs: [], solve: true }),
-      })
+      const r = await fetch(`${API}/polymul-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  p1: question.p1, p2: question.p2, userCoeffs: [], solve: true, sessionGoal }) })
       const data = await r.json()
       setIsCorrect(false); setRevealed(true)
       const display = data.correctDisplay || question.productDisplay || ''
@@ -44527,7 +45832,7 @@ function PolyMulApp({ onBack }) {
   const curAdaptLevel = adaptiveLevel(adaptScore)
 
   return (
-    <QuizLayout title="Poly Multiply" subtitle="Multiply two polynomials and enter the coefficients" onBack={onBack} timer={started && !finished ? timer : null}>
+    <QuizLayout title="Poly Multiply" subtitle="Multiply two polynomials and enter the coefficients" onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
       {!started && !finished && <div className="welcome-box">
         <p className="welcome-text">Practice polynomial multiplication!</p>
         <div className="checkbox-group" style={{ marginBottom: '12px' }}>
@@ -44542,7 +45847,45 @@ function PolyMulApp({ onBack }) {
             Adaptive
           </label>
         </div>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="polymulapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
         {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Starts easy and smoothly adjusts to your level as you answer.</p>}
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} />
@@ -44644,11 +45987,12 @@ function PolyFactorApp({ onBack }) {
   const [totalQ, setTotalQ] = useState(DEFAULT_TOTAL)
   // Array of {question, userAnswer, correctAnswer, correct, time} result objects
   const [results, setResults] = useState([])
+  const [sessionGoal, setSessionGoal] = useState('standard')
   // Timer instance for tracking elapsed time per question
   const timer = useTimer()
   const advanceFnRef = useRef(null)
 
-  const effectiveDiff = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
+  const effectiveDiff = () => (isAdaptive) ? adaptiveLevel(adaptScoreRef.current) : difficulty
 
   /**
    * loadQuestion(): Fetch next polynomial factorization question
@@ -44656,18 +46000,38 @@ function PolyFactorApp({ onBack }) {
    * Returns: {a, b, c, display, factors: {p, q, r, s}, ...}
    * Resets all factor fields to empty and initializes timer
    */
-  const loadQuestion = async () => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/polyfactor-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const loadQuestion = async () => {
     setLoading(true)
     // Reset all four factor coefficient fields and feedback
     setUserP(''); setUserQ(''); setUserR(''); setUserS('')
     setFeedback(''); setIsCorrect(null); setRevealed(false)
     // Fetch polynomial question from backend based on effective difficulty
-    const res = await fetch(`${API}/polyfactor-api/question?difficulty=${effectiveDiff()}`)
+    const res = await fetch(`${API}/polyfactor-api/question?difficulty=${effectiveDiff()}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
     const data = await res.json()
     setQuestion(data)
     setLoading(false)
     // Start timer for this question
-    timer.start()
+    timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
   }
 
   /**
@@ -44699,17 +46063,24 @@ function PolyFactorApp({ onBack }) {
     if (!userP || !userQ || !userR || !userS) return
     const timeTaken = timer.stop()
     // POST to backend to validate factorization
-    const res = await fetch(`${API}/polyfactor-api/check`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ a: question.a, b: question.b, c: question.c, userP: Number(userP), userQ: Number(userQ), userR: Number(userR), userS: Number(userS) }),
-    })
+    const res = await fetch(`${API}/polyfactor-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  a: question.a, b: question.b, c: question.c, userP: Number(userP), userQ: Number(userQ), userR: Number(userR), userS: Number(userS), sessionGoal }) })
     const data = await res.json()
     setIsCorrect(data.correct)
     // Increment score if correct
     if (data.correct) setScore(s => s + 1)
     // Format feedback message using correct factors (p, q, r, s from question.factors)
     const { p, q, r, s } = question.factors
-    setFeedback(data.correct ? `Correct! (${p}x ${q >= 0 ? '+' : '−'} ${Math.abs(q)})(${r}x ${s >= 0 ? '+' : '−'} ${Math.abs(s)})` : `Incorrect. One factorization: (${p}x ${q >= 0 ? '+' : '−'} ${Math.abs(q)})(${r}x ${s >= 0 ? '+' : '−'} ${Math.abs(s)})`)
+    (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! (${p}x ${q >= 0 ? '+' : '−'} ${Math.abs(q)})(${r}x ${s >= 0 ? '+' : '−'} ${Math.abs(s)})`.slice(0,-1) + _ci + `Correct! (${p}x ${q >= 0 ? '+' : '−'} ${Math.abs(q)})(${r}x ${s >= 0 ? '+' : '−'} ${Math.abs(s)})`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. One factorization: (${p}x ${q >= 0 ? '+' : '−'} ${Math.abs(q)})(${r}x ${s >= 0 ? '+' : '−'} ${Math.abs(s)})` + ' ❌ Perfect Solve ended.')
+          setFinished(true); timer.reset()
+        } else {
+          setFeedback(`Incorrect. One factorization: (${p}x ${q >= 0 ? '+' : '−'} ${Math.abs(q)})(${r}x ${s >= 0 ? '+' : '−'} ${Math.abs(s)})`)
+        }
+      })()
     // Add result to history for results table
     setResults(prev => [...prev, {
       question: question.display,
@@ -44765,7 +46136,7 @@ function PolyFactorApp({ onBack }) {
   const curAdaptLevel = adaptiveLevel(adaptScore)
 
   return (
-    <QuizLayout title="Poly Factor" subtitle="Factor the quadratic into (px + q)(rx + s)" onBack={onBack} timer={started && !finished ? timer : null}>
+    <QuizLayout title="Poly Factor" subtitle="Factor the quadratic into (px + q)(rx + s)" onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
       {!started && !finished && <div className="welcome-box">
         <p className="welcome-text">Factor ax² + bx + c into (px + q)(rx + s).</p>
         <div className="checkbox-group" style={{ marginBottom: '12px' }}>
@@ -44780,7 +46151,45 @@ function PolyFactorApp({ onBack }) {
             Adaptive
           </label>
         </div>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="polyfactorapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
         {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Starts easy and smoothly adjusts to your level as you answer.</p>}
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} />
@@ -44881,7 +46290,7 @@ function PrimeFactorApp({ onBack }) {
   const timer = useTimer()
   const advanceFnRef = useRef(null)
 
-  const effectiveDiff = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
+  const effectiveDiff = () => (isAdaptive) ? adaptiveLevel(adaptScoreRef.current) : difficulty
 
   /**
    * loadQuestion(): Fetch next prime factorization question
@@ -44890,18 +46299,38 @@ function PrimeFactorApp({ onBack }) {
    * Initializes with number and sets remaining = number
    * Resets input fields and timer before starting
    */
-  const loadQuestion = async () => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/primefactor-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const loadQuestion = async () => {
     // Reset feedback and UI state
     setFeedback(''); setIsCorrect(null); setRevealed(false)
     // Reset factor input fields
     setEnteredFactors([]); setCurrentInput(''); setInputError('')
     // Fetch prime factorization question from backend based on effective difficulty
-    const res = await fetch(`${API}/primefactor-api/question?difficulty=${effectiveDiff()}`)
+    const res = await fetch(`${API}/primefactor-api/question?difficulty=${effectiveDiff()}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
     const data = await res.json()
     setQuestion(data)
     // Start with full number; it gets divided as factors are found
     setRemaining(data.number)
-    timer.start()
+    timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
   }
 
   /**
@@ -44934,6 +46363,7 @@ function PrimeFactorApp({ onBack }) {
    */
   // Shake + brief error message for invalid factor attempts
   const [inputError, setInputError] = useState('')
+  const [sessionGoal, setSessionGoal] = useState('standard')
   const inputRef = useRef(null)
 
   const addFactor = () => {
@@ -45041,7 +46471,7 @@ function PrimeFactorApp({ onBack }) {
   const curAdaptLevel = adaptiveLevel(adaptScore)
 
   return (
-    <QuizLayout title="Prime Factors" subtitle="Break the number into its prime factors" onBack={onBack} timer={started && !finished ? timer : null}>
+    <QuizLayout title="Prime Factors" subtitle="Break the number into its prime factors" onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
       {!started && !finished && <div className="welcome-box">
         <p className="welcome-text">Enter prime factors one at a time. Watch the remaining number shrink!</p>
         <div className="checkbox-group" style={{ marginBottom: '12px' }}>
@@ -45056,7 +46486,45 @@ function PrimeFactorApp({ onBack }) {
             Adaptive
           </label>
         </div>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="primefactorapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
         {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Starts easy and smoothly adjusts to your level as you answer.</p>}
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} />
@@ -45148,11 +46616,12 @@ function QFormulaApp({ onBack }) {
   const [totalQ, setTotalQ] = useState(DEFAULT_TOTAL)
   // Array of {question, userAnswer, correctAnswer, correct, time} result objects
   const [results, setResults] = useState([])
+  const [sessionGoal, setSessionGoal] = useState('standard')
   // Timer instance for tracking elapsed time per question
   const timer = useTimer()
   const advanceFnRef = useRef(null)
 
-  const effectiveDiff = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
+  const effectiveDiff = () => (isAdaptive) ? adaptiveLevel(adaptScoreRef.current) : difficulty
 
   /**
    * loadQuestion(): Fetch next quadratic formula question
@@ -45163,17 +46632,37 @@ function QFormulaApp({ onBack }) {
    *   - real_equal: r1 (one repeated root)
    *   - complex: realPart, imagPart (roots are a ± bi)
    */
-  const loadQuestion = async () => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/qformula-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const loadQuestion = async () => {
     setLoading(true)
     // Reset root input fields
     setUserR1(''); setUserR2('')
     setFeedback(''); setIsCorrect(null); setRevealed(false)
     // Fetch quadratic formula question from backend based on effective difficulty
-    const res = await fetch(`${API}/qformula-api/question?difficulty=${effectiveDiff()}`)
+    const res = await fetch(`${API}/qformula-api/question?difficulty=${effectiveDiff()}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
     const data = await res.json()
     setQuestion(data)
     setLoading(false)
-    timer.start()
+    timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
   }
 
   /**
@@ -45205,10 +46694,7 @@ function QFormulaApp({ onBack }) {
     if (question.roots.type === 'complex' && !userR2) return
     const timeTaken = timer.stop()
     // POST to backend to validate roots
-    const res = await fetch(`${API}/qformula-api/check`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ a: question.a, b: question.b, c: question.c, userR1: Number(userR1), userR2: Number(userR2), userType: question.roots.type }),
-    })
+    const res = await fetch(`${API}/qformula-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  a: question.a, b: question.b, c: question.c, userR1: Number(userR1), userR2: Number(userR2), userType: question.roots.type, sessionGoal }) })
     const data = await res.json()
     setIsCorrect(data.correct)
     if (data.correct) setScore(s => s + 1)
@@ -45217,7 +46703,17 @@ function QFormulaApp({ onBack }) {
     if (data.roots.type === 'real_distinct') correctStr = `Roots: ${data.roots.r1} and ${data.roots.r2}`
     else if (data.roots.type === 'real_equal') correctStr = `Root: ${data.roots.r1} (repeated)`
     else correctStr = `Roots: ${data.roots.realPart} ± ${data.roots.imagPart}i`
-    setFeedback(data.correct ? `Correct! ${correctStr}` : `Incorrect. ${correctStr}`)
+    (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${correctStr}`.slice(0,-1) + _ci + `Correct! ${correctStr}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. ${correctStr}` + ' ❌ Perfect Solve ended.')
+          setFinished(true); timer.reset()
+        } else {
+          setFeedback(`Incorrect. ${correctStr}`)
+        }
+      })()
     // Add result to history for results table
     setResults(prev => [...prev, {
       question: `${question.a}x² ${question.b>=0?'+':'−'} ${Math.abs(question.b)}x ${question.c>=0?'+':'−'} ${Math.abs(question.c)} = 0`,
@@ -45276,7 +46772,7 @@ function QFormulaApp({ onBack }) {
   const curAdaptLevel = adaptiveLevel(adaptScore)
 
   return (
-    <QuizLayout title="Quadratic Formula" subtitle="Find the roots of ax² + bx + c = 0" onBack={onBack} timer={started && !finished ? timer : null}>
+    <QuizLayout title="Quadratic Formula" subtitle="Find the roots of ax² + bx + c = 0" onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
       {!started && !finished && <div className="welcome-box">
         <p className="welcome-text">Use the quadratic formula to find roots of ax² + bx + c = 0</p>
         <div className="checkbox-group" style={{ marginBottom: '12px' }}>
@@ -45291,7 +46787,45 @@ function QFormulaApp({ onBack }) {
             Adaptive
           </label>
         </div>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="qformulaapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
         {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Starts easy and smoothly adjusts to your level as you answer.</p>}
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} />
@@ -45394,11 +46928,12 @@ function SimulApp({ onBack }) {
   const [totalQ, setTotalQ] = useState(DEFAULT_TOTAL)
   // Array of {question, userAnswer, correctAnswer, correct, time} result objects
   const [results, setResults] = useState([])
+  const [sessionGoal, setSessionGoal] = useState('standard')
   // Timer instance for tracking elapsed time per question
   const timer = useTimer()
   const advanceFnRef = useRef(null)
 
-  const effectiveDiff = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
+  const effectiveDiff = () => (isAdaptive) ? adaptiveLevel(adaptScoreRef.current) : difficulty
 
   // ─────── Derived State ──────────────────────────────────
   // Whether current question is 3×3 (determines if z field is required)
@@ -45412,17 +46947,37 @@ function SimulApp({ onBack }) {
    *   - 2×2: ax + by = d (two equations, two unknowns)
    *   - 3×3: ax + by + cz = d (three equations, three unknowns)
    */
-  const loadQuestion = async () => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/simul-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const loadQuestion = async () => {
     setLoading(true)
     // Reset solution input fields
     setUserX(''); setUserY(''); setUserZ('')
     setFeedback(''); setIsCorrect(null); setRevealed(false)
     // Fetch simultaneous equations question from backend based on effective difficulty
-    const res = await fetch(`${API}/simul-api/question?difficulty=${effectiveDiff()}`)
+    const res = await fetch(`${API}/simul-api/question?difficulty=${effectiveDiff()}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
     const data = await res.json()
     setQuestion(data)
     setLoading(false)
-    timer.start()
+    timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
   }
 
   /**
@@ -45455,20 +47010,37 @@ function SimulApp({ onBack }) {
     const body = { eqs: question.eqs, size: question.size, solution: question.solution, userX: Number(userX), userY: Number(userY) }
     if (is3x3) body.userZ = Number(userZ)
     // POST to backend to validate solution
-    const res = await fetch(`${API}/simul-api/check`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
+    const res = await fetch(`${API}/simul-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({ ...body, sessionGoal }) })
     const data = await res.json()
     setIsCorrect(data.correct)
     if (data.correct) setScore(s => s + 1)
     // Format feedback message and result based on system size
     const s = question.solution
     if (is3x3) {
-      setFeedback(data.correct ? `Correct! (x, y, z) = (${s.x}, ${s.y}, ${s.z})` : `Incorrect. (x, y, z) = (${s.x}, ${s.y}, ${s.z})`)
+      (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! (x, y, z) = (${s.x}, ${s.y}, ${s.z})`.slice(0,-1) + _ci + `Correct! (x, y, z) = (${s.x}, ${s.y}, ${s.z})`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. (x, y, z) = (${s.x}, ${s.y}, ${s.z})` + ' ❌ Perfect Solve ended.')
+          setFinished(true); timer.reset()
+        } else {
+          setFeedback(`Incorrect. (x, y, z) = (${s.x}, ${s.y}, ${s.z})`)
+        }
+      })()
       setResults(prev => [...prev, { question: '3×3 system', userAnswer: `(${userX}, ${userY}, ${userZ})`, correctAnswer: `(${s.x}, ${s.y}, ${s.z})`, correct: data.correct, time: timeTaken }])
     } else {
-      setFeedback(data.correct ? `Correct! (x, y) = (${s.x}, ${s.y})` : `Incorrect. (x, y) = (${s.x}, ${s.y})`)
+      (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! (x, y) = (${s.x}, ${s.y})`.slice(0,-1) + _ci + `Correct! (x, y) = (${s.x}, ${s.y})`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. (x, y) = (${s.x}, ${s.y})` + ' ❌ Perfect Solve ended.')
+          setFinished(true); timer.reset()
+        } else {
+          setFeedback(`Incorrect. (x, y) = (${s.x}, ${s.y})`)
+        }
+      })()
       setResults(prev => [...prev, { question: '2×2 system', userAnswer: `(${userX}, ${userY})`, correctAnswer: `(${s.x}, ${s.y})`, correct: data.correct, time: timeTaken }])
     }
     if (isAdaptive) {
@@ -45530,7 +47102,7 @@ function SimulApp({ onBack }) {
   const curAdaptLevel = adaptiveLevel(adaptScore)
 
   return (
-    <QuizLayout title="Simultaneous Eq." subtitle={`Solve ${isAdaptive ? 'adaptive' : (effectiveDiff() === 'easy' ? '2×2' : '3×3')} systems`} onBack={onBack} timer={started && !finished ? timer : null}>
+    <QuizLayout title="Simultaneous Eq." subtitle={`Solve ${isAdaptive ? 'adaptive' : (effectiveDiff() === 'easy' ? '2×2' : '3×3')} systems`} onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
       {!started && !finished && <div className="welcome-box">
         <p className="welcome-text">Solve systems of linear equations</p>
         <div className="checkbox-group" style={{ marginBottom: '12px' }}>
@@ -45545,7 +47117,45 @@ function SimulApp({ onBack }) {
             Adaptive
           </label>
         </div>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="simulapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
         {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Starts easy and smoothly adjusts to your level as you answer.</p>}
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} />
@@ -45638,27 +47248,48 @@ function FuncEvalApp({ onBack }) {
   const [totalQ, setTotalQ] = useState(DEFAULT_TOTAL)
   // Array of {question, userAnswer, correctAnswer, correct, time} result objects
   const [results, setResults] = useState([])
+  const [sessionGoal, setSessionGoal] = useState('standard')
   // Timer instance for tracking elapsed time per question
   const timer = useTimer()
   const advanceFnRef = useRef(null)
 
-  const effectiveDiff = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
+  const effectiveDiff = () => (isAdaptive) ? adaptiveLevel(adaptScoreRef.current) : difficulty
 
   /**
    * loadQuestion(): Fetch next function evaluation question
    * Endpoint: /funceval-api/question?difficulty={easy|medium|hard}
    * Returns: {formula: "2x + 3", vars: {x: 5}, answer: 13}
    */
-  const loadQuestion = async () => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/funceval-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const loadQuestion = async () => {
     setLoading(true)
     setAnswer('')
     setFeedback(''); setIsCorrect(null); setRevealed(false)
     // Fetch function evaluation question from backend based on effective difficulty
-    const res = await fetch(`${API}/funceval-api/question?difficulty=${effectiveDiff()}`)
+    const res = await fetch(`${API}/funceval-api/question?difficulty=${effectiveDiff()}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
     const data = await res.json()
     setQuestion(data)
     setLoading(false)
-    timer.start()
+    timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
   }
 
   /**
@@ -45684,16 +47315,23 @@ function FuncEvalApp({ onBack }) {
     if (!question || revealed || !answer) return
     const timeTaken = timer.stop()
     // POST to backend to validate function evaluation
-    const res = await fetch(`${API}/funceval-api/check`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ answer: question.answer, userAnswer: Number(answer) }),
-    })
+    const res = await fetch(`${API}/funceval-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  answer: question.answer, userAnswer: Number(answer), sessionGoal }) })
     const data = await res.json()
     setIsCorrect(data.correct)
     if (data.correct) setScore(s => s + 1)
     // Format variable string for feedback (e.g., "x=2, y=3")
     const varStr = Object.entries(question.vars).map(([k, v]) => `${k}=${v}`).join(', ')
-    setFeedback(data.correct ? `Correct! f(${varStr}) = ${data.correctAnswer}` : `Incorrect. f(${varStr}) = ${data.correctAnswer}`)
+    (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! f(${varStr}) = ${data.correctAnswer}`.slice(0,-1) + _ci + `Correct! f(${varStr}) = ${data.correctAnswer}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. f(${varStr}) = ${data.correctAnswer}` + ' ❌ Perfect Solve ended.')
+          setFinished(true); timer.reset()
+        } else {
+          setFeedback(`Incorrect. f(${varStr}) = ${data.correctAnswer}`)
+        }
+      })()
     // Add result to history for results table
     setResults(prev => [...prev, {
       question: `${question.formula}, ${varStr}`,
@@ -45743,7 +47381,7 @@ function FuncEvalApp({ onBack }) {
   const curAdaptLevel = adaptiveLevel(adaptScore)
 
   return (
-    <QuizLayout title="Functions" subtitle="Evaluate the function at the given values" onBack={onBack} timer={started && !finished ? timer : null}>
+    <QuizLayout title="Functions" subtitle="Evaluate the function at the given values" onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
       {!started && !finished && <div className="welcome-box">
         <p className="welcome-text">Evaluate linear functions</p>
         <div className="checkbox-group" style={{ marginBottom: '12px' }}>
@@ -45758,7 +47396,45 @@ function FuncEvalApp({ onBack }) {
             Adaptive
           </label>
         </div>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="funcevalapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
         {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Starts easy and smoothly adjusts to your level as you answer.</p>}
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} />
@@ -45853,28 +47529,49 @@ function LineEqApp({ onBack }) {
   const [totalQ, setTotalQ] = useState(DEFAULT_TOTAL)
   // Array of {question, userAnswer, correctAnswer, correct, time} result objects
   const [results, setResults] = useState([])
+  const [sessionGoal, setSessionGoal] = useState('standard')
   // Timer instance for tracking elapsed time per question
   const timer = useTimer()
   const advanceFnRef = useRef(null)
 
-  const effectiveDiff = () => isAdaptive ? adaptiveLevel(adaptScoreRef.current) : difficulty
+  const effectiveDiff = () => (isAdaptive) ? adaptiveLevel(adaptScoreRef.current) : difficulty
 
   /**
    * loadQuestion(): Fetch next line equation question
    * Endpoint: /lineq-api/question?difficulty={easy|medium|hard}
    * Returns: {x1, y1, x2, y2} - two points on the line
    */
-  const loadQuestion = async () => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/lineq-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const loadQuestion = async () => {
     setLoading(true)
     // Reset slope and intercept input fields
     setUserM(''); setUserC('')
     setFeedback(''); setIsCorrect(null); setRevealed(false)
     // Fetch line equation question from backend based on effective difficulty
-    const res = await fetch(`${API}/lineq-api/question?difficulty=${effectiveDiff()}`)
+    const res = await fetch(`${API}/lineq-api/question?difficulty=${effectiveDiff()}&goal=${sessionGoal}`, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } })
     const data = await res.json()
     setQuestion(data)
     setLoading(false)
-    timer.start()
+    timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
   }
 
   /**
@@ -45900,15 +47597,22 @@ function LineEqApp({ onBack }) {
     if (!question || revealed || !userM || !userC) return
     const timeTaken = timer.stop()
     // POST to backend to validate line equation
-    const res = await fetch(`${API}/lineq-api/check`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ x1: question.x1, y1: question.y1, x2: question.x2, y2: question.y2, userM: Number(userM), userC: Number(userC) }),
-    })
+    const res = await fetch(`${API}/lineq-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  x1: question.x1, y1: question.y1, x2: question.x2, y2: question.y2, userM: Number(userM), userC: Number(userC), sessionGoal }) })
     const data = await res.json()
     setIsCorrect(data.correct)
     if (data.correct) setScore(s => s + 1)
     // Format feedback message with correct m and c values
-    setFeedback(data.correct ? `Correct! y = ${data.m}x ${data.c >= 0 ? '+' : '−'} ${Math.abs(data.c)}` : `Incorrect. y = ${data.m}x ${data.c >= 0 ? '+' : '−'} ${Math.abs(data.c)}`)
+    (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! y = ${data.m}x ${data.c >= 0 ? '+' : '−'} ${Math.abs(data.c)}`.slice(0,-1) + _ci + `Correct! y = ${data.m}x ${data.c >= 0 ? '+' : '−'} ${Math.abs(data.c)}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. y = ${data.m}x ${data.c >= 0 ? '+' : '−'} ${Math.abs(data.c)}` + ' ❌ Perfect Solve ended.')
+          setFinished(true); timer.reset()
+        } else {
+          setFeedback(`Incorrect. y = ${data.m}x ${data.c >= 0 ? '+' : '−'} ${Math.abs(data.c)}`)
+        }
+      })()
     // Add result to history for results table
     setResults(prev => [...prev, {
       question: `(${question.x1},${question.y1}) (${question.x2},${question.y2})`,
@@ -45962,7 +47666,7 @@ function LineEqApp({ onBack }) {
   const curAdaptLevel = adaptiveLevel(adaptScore)
 
   return (
-    <QuizLayout title="Line Equation" subtitle="Find m and c in y = mx + c from two points" onBack={onBack} timer={started && !finished ? timer : null}>
+    <QuizLayout title="Line Equation" subtitle="Find m and c in y = mx + c from two points" onBack={onBack} timer={started && !finished && sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
       {!started && !finished && <div className="welcome-box">
         <p className="welcome-text">Given two points, find the slope m and intercept c.</p>
         <div className="checkbox-group" style={{ marginBottom: '12px' }}>
@@ -45977,7 +47681,45 @@ function LineEqApp({ onBack }) {
             Adaptive
           </label>
         </div>
+
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '12px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed', label: '⚡ Speed Run' },
+            { key: 'perfect', label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' }
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed' ? { background: 'rgba(255,179,0,0.18)', borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect' ? { background: 'rgba(244,67,54,0.18)', borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="lineeqapp-goal" checked={sessionGoal === g.key} onChange={() => {
+                setSessionGoal(g.key)
+                
+              }} />
+              {g.label}
+            </label>
+          ))}
+        </div>
         {isAdaptive && <p style={{ fontSize: '0.82rem', color: 'var(--clr-dim)', marginBottom: '8px' }}>Starts easy and smoothly adjusts to your level as you answer.</p>}
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} />
@@ -46108,7 +47850,7 @@ const CUSTOM_PUZZLES = [
  * Different puzzle types use different API endpoints with varying parameter styles
  * Returns: Promise<question object from backend>
  */
-function fetchQuestionForType(type, difficulty, qIndex = 0) {
+function fetchQuestionForType(type, difficulty, qIndex = 0, sessionGoal = 'standard') {
   // Map difficulty levels to numeric step values for some puzzle types
   const diffMap = { easy: 1, medium: 2, hard: 3 }
   const urls = {
@@ -46193,7 +47935,15 @@ function fetchQuestionForType(type, difficulty, qIndex = 0) {
     diffeq: `${API}/diffeq-api/question?difficulty=${difficulty}`,
     tatsavit: `${API}/tatsavit-api/question?difficulty=${difficulty}`,
   }
-  return fetch(urls[type]).then(r => r.json())
+  const url = urls[type] || `${API}/${type}-api/question?difficulty=${difficulty}`
+  const separator = url.includes('?') ? '&' : '?'
+  const finalUrl = `${url}${separator}goal=${sessionGoal}`
+  return fetch(finalUrl, { headers: { 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' } }).then(r => r.json())
+}
+
+function getApiPathForType(type) {
+  if (type === 'circleth') return 'circle-api'
+  return `${type}-api`
 }
 
 /**
@@ -46316,6 +48066,7 @@ function CustomApp({ onBack }) {
   const [userCoeffs, setUserCoeffs] = useState([])
   // Object for storing various inputs: {p, q, r, s} for polyfactor, {factors} for primefactor, {x, y, z} for simul, {m, c} for lineq, etc.
   const [inputs, setInputs] = useState({})
+  const [sessionGoal, setSessionGoal] = useState('standard')
 
   // ─────── Derived State ──────────────────────────────────
   // Total number of questions in this quiz (length of plan)
@@ -46353,7 +48104,28 @@ function CustomApp({ onBack }) {
    *   - 'random': pick random puzzles from selected, questions appear in random order
    * Transition to 'quiz' phase and load first question
    */
-  const startQuiz = async () => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (phase === 'finished') return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const apiPath = getApiPathForType(curType || 'basicarith')
+      const r = await fetch(`${API}/${apiPath}/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setPhase('finished'); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const startQuiz = async () => {
     const count = numQuestions !== '' && Number(numQuestions) > 0 ? Number(numQuestions) : 20
     let questionPlan = []
     if (ordering === 'sequential') {
@@ -46418,7 +48190,7 @@ function CustomApp({ onBack }) {
       setQuestion(null)
     }
     setLoading(false)
-    timer.start()
+    timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', false))
   }
 
   /**
@@ -46440,70 +48212,140 @@ function CustomApp({ onBack }) {
       case 'basicarith': {
         if (answer === '') return
         // POST to /basicarith-api/check: validate arithmetic answer
-        res = await fetch(`${API}/basicarith-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ a: question.a, b: question.b, op: question.op, answer: Number(answer) }) })
+        res = await fetch(`${API}/basicarith-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  a: question.a, b: question.b, op: question.op, answer: Number(answer), sessionGoal }) })
         data = await res.json()
-        correct = data.correct; correctDisplay = String(data.correctAnswer); userDisplay = answer
-        setFeedback(data.correct ? `Correct! ${question.prompt} = ${data.correctAnswer}` : `Incorrect. ${question.prompt} = ${data.correctAnswer}`)
+        correct = data.correct; correctDisplay = String(data.correctAnswer); userDisplay = answer;
+        (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${question.prompt} = ${data.correctAnswer}`.slice(0,-1) + _ci + `Correct! ${question.prompt} = ${data.correctAnswer}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. ${question.prompt} = ${data.correctAnswer}` + ' ❌ Perfect Solve ended.')
+          setPhase('finished'); timer.reset()
+        } else {
+          setFeedback(`Incorrect. ${question.prompt} = ${data.correctAnswer}`)
+        }
+      })()
         break
       }
       // ─────── Addition Puzzle ──────────────────────────────────
       case 'addition': {
         if (answer === '') return
         // POST to /addition-api/check: validate addition answer
-        res = await fetch(`${API}/addition-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ a: question.a, b: question.b, answer: Number(answer) }) })
+        res = await fetch(`${API}/addition-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  a: question.a, b: question.b, answer: Number(answer), sessionGoal }) })
         data = await res.json()
-        correct = data.correct; correctDisplay = String(data.correctAnswer); userDisplay = answer
-        setFeedback(data.correct ? `Correct! ${question.a} + ${question.b} = ${data.correctAnswer}` : `Incorrect. ${question.a} + ${question.b} = ${data.correctAnswer}`)
+        correct = data.correct; correctDisplay = String(data.correctAnswer); userDisplay = answer;
+        (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${question.a} + ${question.b} = ${data.correctAnswer}`.slice(0,-1) + _ci + `Correct! ${question.a} + ${question.b} = ${data.correctAnswer}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. ${question.a} + ${question.b} = ${data.correctAnswer}` + ' ❌ Perfect Solve ended.')
+          setPhase('finished'); timer.reset()
+        } else {
+          setFeedback(`Incorrect. ${question.a} + ${question.b} = ${data.correctAnswer}`)
+        }
+      })()
         break
       }
       // ─────── Quadratic Evaluation Puzzle ──────────────────────────────────
       case 'quadratic': {
         if (answer === '') return
         // POST to /quadratic-api/check: evaluate quadratic ax²+bx+c at given x
-        res = await fetch(`${API}/quadratic-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ a: question.a, b: question.b, c: question.c, x: question.x, answer: Number(answer) }) })
+        res = await fetch(`${API}/quadratic-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  a: question.a, b: question.b, c: question.c, x: question.x, answer: Number(answer), sessionGoal }) })
         data = await res.json()
-        correct = data.correct; correctDisplay = String(data.correctAnswer); userDisplay = answer
-        setFeedback(data.correct ? `Correct! y = ${data.correctAnswer}` : `Incorrect. y = ${data.correctAnswer}`)
+        correct = data.correct; correctDisplay = String(data.correctAnswer); userDisplay = answer;
+        (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! y = ${data.correctAnswer}`.slice(0,-1) + _ci + `Correct! y = ${data.correctAnswer}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. y = ${data.correctAnswer}` + ' ❌ Perfect Solve ended.')
+          setPhase('finished'); timer.reset()
+        } else {
+          setFeedback(`Incorrect. y = ${data.correctAnswer}`)
+        }
+      })()
         break
       }
       // ─────── Multiplication Table Puzzle ──────────────────────────────────
       case 'multiply': {
         if (answer === '') return
         // POST to /multiply-api/check: validate multiplication table answer
-        res = await fetch(`${API}/multiply-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ table: question.table, multiplier: question.multiplier, answer: Number(answer) }) })
+        res = await fetch(`${API}/multiply-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  table: question.table, multiplier: question.multiplier, answer: Number(answer), sessionGoal }) })
         data = await res.json()
-        correct = data.correct; correctDisplay = String(data.correctAnswer); userDisplay = answer
-        setFeedback(data.correct ? `Correct! ${question.prompt} = ${data.correctAnswer}` : `Incorrect. ${question.prompt} = ${data.correctAnswer}`)
+        correct = data.correct; correctDisplay = String(data.correctAnswer); userDisplay = answer;
+        (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${question.prompt} = ${data.correctAnswer}`.slice(0,-1) + _ci + `Correct! ${question.prompt} = ${data.correctAnswer}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. ${question.prompt} = ${data.correctAnswer}` + ' ❌ Perfect Solve ended.')
+          setPhase('finished'); timer.reset()
+        } else {
+          setFeedback(`Incorrect. ${question.prompt} = ${data.correctAnswer}`)
+        }
+      })()
         break
       }
       // ─────── Square Root Puzzle ──────────────────────────────────
       case 'sqrt': {
         if (answer === '') return
         // POST to /sqrt-api/check: validate square root floor/ceiling answer
-        res = await fetch(`${API}/sqrt-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ q: question.q, answer: Number(answer) }) })
+        res = await fetch(`${API}/sqrt-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  q: question.q, answer: Number(answer), sessionGoal }) })
         data = await res.json()
-        correct = data.correct; correctDisplay = `⌊${data.sqrtRounded}⌋=${data.floorAnswer} or ⌈${data.sqrtRounded}⌉=${data.ceilAnswer}`; userDisplay = answer
-        setFeedback(data.correct ? `Correct! √${question.q} ≈ ${data.sqrtRounded}` : `Incorrect. √${question.q} ≈ ${data.sqrtRounded} → ${data.floorAnswer} or ${data.ceilAnswer}`)
+        correct = data.correct; correctDisplay = `⌊${data.sqrtRounded}⌋=${data.floorAnswer} or ⌈${data.sqrtRounded}⌉=${data.ceilAnswer}`; userDisplay = answer;
+        (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! √${question.q} ≈ ${data.sqrtRounded}`.slice(0,-1) + _ci + `Correct! √${question.q} ≈ ${data.sqrtRounded}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. √${question.q} ≈ ${data.sqrtRounded} → ${data.floorAnswer} or ${data.ceilAnswer}` + ' ❌ Perfect Solve ended.')
+          setPhase('finished'); timer.reset()
+        } else {
+          setFeedback(`Incorrect. √${question.q} ≈ ${data.sqrtRounded} → ${data.floorAnswer} or ${data.ceilAnswer}`)
+        }
+      })()
         break
       }
       // ─────── Function Evaluation Puzzle ──────────────────────────────────
       case 'funceval': {
         if (answer === '') return
         // POST to /funceval-api/check: evaluate f(x,y,z,...) at given values
-        res = await fetch(`${API}/funceval-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ answer: question.answer, userAnswer: Number(answer) }) })
+        res = await fetch(`${API}/funceval-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  answer: question.answer, userAnswer: Number(answer), sessionGoal }) })
         data = await res.json()
-        correct = data.correct; correctDisplay = String(data.correctAnswer); userDisplay = answer
-        setFeedback(data.correct ? `Correct! = ${data.correctAnswer}` : `Incorrect. = ${data.correctAnswer}`)
+        correct = data.correct; correctDisplay = String(data.correctAnswer); userDisplay = answer;
+        (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! = ${data.correctAnswer}`.slice(0,-1) + _ci + `Correct! = ${data.correctAnswer}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. = ${data.correctAnswer}` + ' ❌ Perfect Solve ended.')
+          setPhase('finished'); timer.reset()
+        } else {
+          setFeedback(`Incorrect. = ${data.correctAnswer}`)
+        }
+      })()
         break
       }
       // ─────── Polynomial Multiply Puzzle ──────────────────────────────────
       case 'polymul': {
         if (userCoeffs.some(c => c === '')) return
         // POST to /polymul-api/check: validate polynomial multiplication result coefficients
-        res = await fetch(`${API}/polymul-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ p1: question.p1, p2: question.p2, userCoeffs: userCoeffs.map(Number) }) })
+        res = await fetch(`${API}/polymul-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  p1: question.p1, p2: question.p2, userCoeffs: userCoeffs.map(Number), sessionGoal }) })
         data = await res.json()
-        correct = data.correct; correctDisplay = data.correctDisplay; userDisplay = userCoeffs.join(', ')
-        setFeedback(data.correct ? `Correct! ${question.productDisplay}` : `Incorrect. Answer: ${data.correctDisplay}`)
+        correct = data.correct; correctDisplay = data.correctDisplay; userDisplay = userCoeffs.join(', ');
+        (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${question.productDisplay}`.slice(0,-1) + _ci + `Correct! ${question.productDisplay}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. Answer: ${data.correctDisplay}` + ' ❌ Perfect Solve ended.')
+          setPhase('finished'); timer.reset()
+        } else {
+          setFeedback(`Incorrect. Answer: ${data.correctDisplay}`)
+        }
+      })()
         break
       }
       // ─────── Polynomial Factorization Puzzle ──────────────────────────────────
@@ -46511,11 +48353,21 @@ function CustomApp({ onBack }) {
         const { p: up, q: uq, r: ur, s: us } = inputs
         if (!up || !uq || !ur || !us) return
         // POST to /polyfactor-api/check: validate polynomial factorization (px+q)(rx+s)
-        res = await fetch(`${API}/polyfactor-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ a: question.a, b: question.b, c: question.c, userP: Number(up), userQ: Number(uq), userR: Number(ur), userS: Number(us) }) })
+        res = await fetch(`${API}/polyfactor-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  a: question.a, b: question.b, c: question.c, userP: Number(up), userQ: Number(uq), userR: Number(ur), userS: Number(us), sessionGoal }) })
         data = await res.json()
         const f = question.factors
-        correct = data.correct; correctDisplay = `(${f.p}x${f.q>=0?'+':''}${f.q})(${f.r}x${f.s>=0?'+':''}${f.s})`; userDisplay = `(${up}x${Number(uq)>=0?'+':''}${uq})(${ur}x${Number(us)>=0?'+':''}${us})`
-        setFeedback(data.correct ? `Correct! ${correctDisplay}` : `Incorrect. ${correctDisplay}`)
+        correct = data.correct; correctDisplay = `(${f.p}x${f.q>=0?'+':''}${f.q})(${f.r}x${f.s>=0?'+':''}${f.s})`; userDisplay = `(${up}x${Number(uq)>=0?'+':''}${uq})(${ur}x${Number(us)>=0?'+':''}${us})`;
+        (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${correctDisplay}`.slice(0,-1) + _ci + `Correct! ${correctDisplay}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. ${correctDisplay}` + ' ❌ Perfect Solve ended.')
+          setPhase('finished'); timer.reset()
+        } else {
+          setFeedback(`Incorrect. ${correctDisplay}`)
+        }
+      })()
         break
       }
       // ─────── Prime Factorization Puzzle ──────────────────────────────────
@@ -46523,10 +48375,20 @@ function CustomApp({ onBack }) {
         const pf = (inputs.factors || '').split(/[,\s]+/).filter(Boolean).map(Number).sort((a,b) => a - b)
         if (pf.length === 0) return
         // POST to /primefactor-api/check: validate prime factorization (sorted list)
-        res = await fetch(`${API}/primefactor-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ number: question.number, userFactors: pf }) })
+        res = await fetch(`${API}/primefactor-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  number: question.number, userFactors: pf, sessionGoal }) })
         data = await res.json()
-        correct = data.correct; correctDisplay = data.correctFactors.join(' × '); userDisplay = pf.join(' × ')
-        setFeedback(data.correct ? `Correct! ${question.number} = ${correctDisplay}` : `Incorrect. ${question.number} = ${correctDisplay}`)
+        correct = data.correct; correctDisplay = data.correctFactors.join(' × '); userDisplay = pf.join(' × ');
+        (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${question.number} = ${correctDisplay}`.slice(0,-1) + _ci + `Correct! ${question.number} = ${correctDisplay}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. ${question.number} = ${correctDisplay}` + ' ❌ Perfect Solve ended.')
+          setPhase('finished'); timer.reset()
+        } else {
+          setFeedback(`Incorrect. ${question.number} = ${correctDisplay}`)
+        }
+      })()
         break
       }
       // ─────── Quadratic Formula Puzzle ──────────────────────────────────
@@ -46535,14 +48397,24 @@ function CustomApp({ onBack }) {
         if (question.roots.type === 'real_equal' && !r1) return
         if (question.roots.type !== 'real_equal' && (!r1 || !r2)) return
         // POST to /qformula-api/check: validate quadratic formula roots (type-dependent)
-        res = await fetch(`${API}/qformula-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ a: question.a, b: question.b, c: question.c, userR1: Number(r1), userR2: Number(r2 || 0), userType: question.roots.type }) })
+        res = await fetch(`${API}/qformula-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  a: question.a, b: question.b, c: question.c, userR1: Number(r1), userR2: Number(r2 || 0), userType: question.roots.type, sessionGoal }) })
         data = await res.json()
         correct = data.correct
         const rt = data.roots
         // Format display based on root type (real_distinct, real_equal, or complex)
         correctDisplay = rt.type === 'real_distinct' ? `r₁ = ${rt.r1}, r₂ = ${rt.r2}` : rt.type === 'real_equal' ? `r = ${rt.r1}` : `${rt.realPart} ± ${rt.imagPart}i`
-        userDisplay = question.roots.type === 'real_equal' ? r1 : `${r1}, ${r2}`
-        setFeedback(data.correct ? `Correct! ${correctDisplay}` : `Incorrect. ${correctDisplay}`)
+        userDisplay = question.roots.type === 'real_equal' ? r1 : `${r1}, ${r2}`;
+        (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${correctDisplay}`.slice(0,-1) + _ci + `Correct! ${correctDisplay}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. ${correctDisplay}` + ' ❌ Perfect Solve ended.')
+          setPhase('finished'); timer.reset()
+        } else {
+          setFeedback(`Incorrect. ${correctDisplay}`)
+        }
+      })()
         break
       }
       // ─────── Simultaneous Equations Puzzle ──────────────────────────────────
@@ -46553,13 +48425,23 @@ function CustomApp({ onBack }) {
         const body = { eqs: question.eqs, size: question.size, solution: question.solution, userX: Number(ux), userY: Number(uy) }
         if (question.size === 3) body.userZ = Number(uz)
         // POST to /simul-api/check: validate simultaneous equation solution (2×2 or 3×3)
-        res = await fetch(`${API}/simul-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        res = await fetch(`${API}/simul-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({ ...body, sessionGoal }) })
         data = await res.json()
         correct = data.correct
         const s = question.solution
         correctDisplay = question.size === 3 ? `(${s.x}, ${s.y}, ${s.z})` : `(${s.x}, ${s.y})`
-        userDisplay = question.size === 3 ? `(${ux}, ${uy}, ${uz})` : `(${ux}, ${uy})`
-        setFeedback(data.correct ? `Correct! ${correctDisplay}` : `Incorrect. ${correctDisplay}`)
+        userDisplay = question.size === 3 ? `(${ux}, ${uy}, ${uz})` : `(${ux}, ${uy})`;
+        (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${correctDisplay}`.slice(0,-1) + _ci + `Correct! ${correctDisplay}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. ${correctDisplay}` + ' ❌ Perfect Solve ended.')
+          setPhase('finished'); timer.reset()
+        } else {
+          setFeedback(`Incorrect. ${correctDisplay}`)
+        }
+      })()
         break
       }
       // ─────── Line Equation Puzzle ──────────────────────────────────
@@ -46567,10 +48449,20 @@ function CustomApp({ onBack }) {
         const { m, c } = inputs
         if (!m || !c) return
         // POST to /lineq-api/check: validate line equation y=mx+c from two points
-        res = await fetch(`${API}/lineq-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ x1: question.x1, y1: question.y1, x2: question.x2, y2: question.y2, userM: Number(m), userC: Number(c) }) })
+        res = await fetch(`${API}/lineq-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({  x1: question.x1, y1: question.y1, x2: question.x2, y2: question.y2, userM: Number(m), userC: Number(c), sessionGoal }) })
         data = await res.json()
-        correct = data.correct; correctDisplay = `m = ${data.m}, c = ${data.c}`; userDisplay = `m = ${m}, c = ${c}`
-        setFeedback(data.correct ? `Correct! ${correctDisplay}` : `Incorrect. ${correctDisplay}`)
+        correct = data.correct; correctDisplay = `m = ${data.m}, c = ${data.c}`; userDisplay = `m = ${m}, c = ${c}`;
+        (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${correctDisplay}`.slice(0,-1) + _ci + `Correct! ${correctDisplay}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. ${correctDisplay}` + ' ❌ Perfect Solve ended.')
+          setPhase('finished'); timer.reset()
+        } else {
+          setFeedback(`Incorrect. ${correctDisplay}`)
+        }
+      })()
         break
       }
       // ─────── Fraction Addition Puzzle ──────────────────────────────────
@@ -46590,10 +48482,20 @@ function CustomApp({ onBack }) {
         } else {
           fracPayload.ansNum = Number(answer); fracPayload.ansDen = 1
         }
-        res = await fetch(`${API}/fractionadd-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fracPayload) })
+        res = await fetch(`${API}/fractionadd-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({ ...fracPayload, sessionGoal }) })
         data = await res.json()
-        correct = data.correct; correctDisplay = data.display; userDisplay = answer
-        setFeedback(data.correct ? `Correct! = ${data.display}` : `Incorrect. = ${data.display}`)
+        correct = data.correct; correctDisplay = data.display; userDisplay = answer;
+        (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! = ${data.display}`.slice(0,-1) + _ci + `Correct! = ${data.display}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. = ${data.display}` + ' ❌ Perfect Solve ended.')
+          setPhase('finished'); timer.reset()
+        } else {
+          setFeedback(`Incorrect. = ${data.display}`)
+        }
+      })()
         break
       }
       // ─────── Surds Puzzle ──────────────────────────────────
@@ -46601,60 +48503,120 @@ function CustomApp({ onBack }) {
         if (answer === '') return
         const surdAnswer = answer.replace(/sqrt/gi, '√').trim()
         const surdPayload = { ...question, answer: surdAnswer }
-        res = await fetch(`${API}/surds-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(surdPayload) })
+        res = await fetch(`${API}/surds-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({ ...surdPayload, sessionGoal }) })
         data = await res.json()
-        correct = data.correct; correctDisplay = data.display; userDisplay = surdAnswer
-        setFeedback(data.correct ? `Correct! = ${data.display}` : `Incorrect. = ${data.display}`)
+        correct = data.correct; correctDisplay = data.display; userDisplay = surdAnswer;
+        (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! = ${data.display}`.slice(0,-1) + _ci + `Correct! = ${data.display}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. = ${data.display}` + ' ❌ Perfect Solve ended.')
+          setPhase('finished'); timer.reset()
+        } else {
+          setFeedback(`Incorrect. = ${data.display}`)
+        }
+      })()
         break
       }
       // ─────── Indices Puzzle ──────────────────────────────────
       case 'indices': {
         if (answer === '') return
         const idxPayload = { ...question, answer: answer.trim() }
-        res = await fetch(`${API}/indices-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(idxPayload) })
+        res = await fetch(`${API}/indices-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({ ...idxPayload, sessionGoal }) })
         data = await res.json()
-        correct = data.correct; correctDisplay = data.display; userDisplay = answer.trim()
-        setFeedback(data.correct ? `Correct! = ${data.display}` : `Incorrect. = ${data.display}`)
+        correct = data.correct; correctDisplay = data.display; userDisplay = answer.trim();
+        (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! = ${data.display}`.slice(0,-1) + _ci + `Correct! = ${data.display}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. = ${data.display}` + ' ❌ Perfect Solve ended.')
+          setPhase('finished'); timer.reset()
+        } else {
+          setFeedback(`Incorrect. = ${data.display}`)
+        }
+      })()
         break
       }
       // ─────── Sequences & Series ──────────────────────────────────
       case 'sequences': {
         if (answer === '') return
         const seqPayload = { ...question, answer: answer.trim() }
-        res = await fetch(`${API}/sequences-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(seqPayload) })
+        res = await fetch(`${API}/sequences-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({ ...seqPayload, sessionGoal }) })
         data = await res.json()
-        correct = data.correct; correctDisplay = data.display; userDisplay = answer.trim()
-        setFeedback(data.correct ? `Correct! ${data.display}` : `Incorrect. Answer: ${data.display}`)
+        correct = data.correct; correctDisplay = data.display; userDisplay = answer.trim();
+        (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${data.display}`.slice(0,-1) + _ci + `Correct! ${data.display}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. Answer: ${data.display}` + ' ❌ Perfect Solve ended.')
+          setPhase('finished'); timer.reset()
+        } else {
+          setFeedback(`Incorrect. Answer: ${data.display}`)
+        }
+      })()
         break
       }
       // ─────── Ratio & Proportion ──────────────────────────────────
       case 'ratio': {
         if (answer === '') return
         const ratPayload = { ...question, answer: answer.trim() }
-        res = await fetch(`${API}/ratio-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ratPayload) })
+        res = await fetch(`${API}/ratio-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({ ...ratPayload, sessionGoal }) })
         data = await res.json()
-        correct = data.correct; correctDisplay = data.display; userDisplay = answer.trim()
-        setFeedback(data.correct ? `Correct! ${data.display}` : `Incorrect. Answer: ${data.display}`)
+        correct = data.correct; correctDisplay = data.display; userDisplay = answer.trim();
+        (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${data.display}`.slice(0,-1) + _ci + `Correct! ${data.display}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. Answer: ${data.display}` + ' ❌ Perfect Solve ended.')
+          setPhase('finished'); timer.reset()
+        } else {
+          setFeedback(`Incorrect. Answer: ${data.display}`)
+        }
+      })()
         break
       }
       // ─────── Percentages ──────────────────────────────────
       case 'percent': {
         if (answer === '') return
         const pctPayload = { ...question, userAnswer: answer.trim().replace(/[$,]/g, '') }
-        res = await fetch(`${API}/percent-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pctPayload) })
+        res = await fetch(`${API}/percent-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({ ...pctPayload, sessionGoal }) })
         data = await res.json()
-        correct = data.correct; correctDisplay = data.display; userDisplay = answer.trim()
-        setFeedback(data.correct ? `Correct! ${data.display}` : `Incorrect. Answer: ${data.display}`)
+        correct = data.correct; correctDisplay = data.display; userDisplay = answer.trim();
+        (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${data.display}`.slice(0,-1) + _ci + `Correct! ${data.display}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. Answer: ${data.display}` + ' ❌ Perfect Solve ended.')
+          setPhase('finished'); timer.reset()
+        } else {
+          setFeedback(`Incorrect. Answer: ${data.display}`)
+        }
+      })()
         break
       }
       // ─────── Sets ──────────────────────────────────
       case 'sets': {
         if (answer === '') return
         const setsPayload = { ...question, userAnswer: answer.trim() }
-        res = await fetch(`${API}/sets-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(setsPayload) })
+        res = await fetch(`${API}/sets-api/check`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' }, body: JSON.stringify({ ...setsPayload, sessionGoal }) })
         data = await res.json()
-        correct = data.correct; correctDisplay = data.display; userDisplay = answer.trim()
-        setFeedback(data.correct ? `Correct! ${data.display}` : `Incorrect. Answer: ${data.display}`)
+        correct = data.correct; correctDisplay = data.display; userDisplay = answer.trim();
+        (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${data.display}`.slice(0,-1) + _ci + `Correct! ${data.display}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. Answer: ${data.display}` + ' ❌ Perfect Solve ended.')
+          setPhase('finished'); timer.reset()
+        } else {
+          setFeedback(`Incorrect. Answer: ${data.display}`)
+        }
+      })()
         break
       }
       // ─────── Generic API puzzles ──────────────────────────────────
@@ -46672,8 +48634,18 @@ function CustomApp({ onBack }) {
         const genPayload = { ...question, userAnswer: answer.trim() }
         res = await fetch(`${API}/${apiMap[curType]}/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(genPayload) })
         data = await res.json()
-        correct = data.correct; correctDisplay = data.display; userDisplay = answer.trim()
-        setFeedback(data.correct ? `Correct! ${data.display}` : `Incorrect. Answer: ${data.display}`)
+        correct = data.correct; correctDisplay = data.display; userDisplay = answer.trim();
+        (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${data.display}`.slice(0,-1) + _ci + `Correct! ${data.display}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. Answer: ${data.display}` + ' ❌ Perfect Solve ended.')
+          setPhase('finished'); timer.reset()
+        } else {
+          setFeedback(`Incorrect. Answer: ${data.display}`)
+        }
+      })()
         break
       }
       // ─────── Multiple Choice Puzzles (GK, Vocab) ──────────────────────────────────
@@ -46684,8 +48656,18 @@ function CustomApp({ onBack }) {
         // POST to type-specific check endpoint: validate multiple choice answer
         res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: question.id, answerOption: optionToUse }) })
         data = await res.json()
-        correct = data.correct; correctDisplay = `${data.correctAnswer}: ${data.correctAnswerText}`; userDisplay = optionToUse
-        setFeedback(data.correct ? `Correct! ${data.correctAnswerText}` : `Incorrect. ${data.correctAnswerText}`)
+        correct = data.correct; correctDisplay = `${data.correctAnswer}: ${data.correctAnswerText}`; userDisplay = optionToUse;
+        (() => {
+        const _ci = data.lil?.coinsEarned > 0 ? ` (+${data.lil.coinsEarned} coins!)` : ''
+        if (data.correct) {
+          setFeedback(`Correct! ${data.correctAnswerText}`.slice(0,-1) + _ci + `Correct! ${data.correctAnswerText}`.slice(-1))
+        } else if (sessionGoal === 'perfect') {
+          setFeedback(`Incorrect. ${data.correctAnswerText}` + ' ❌ Perfect Solve ended.')
+          setPhase('finished'); timer.reset()
+        } else {
+          setFeedback(`Incorrect. ${data.correctAnswerText}`)
+        }
+      })()
         break
       }
       default: return
@@ -46704,6 +48686,11 @@ function CustomApp({ onBack }) {
       correct,
       time: timeTaken,
     }])
+    if (sessionGoal === 'perfect' && !correct) {
+      setPhase('finished')
+      timer.reset()
+      return
+    }
     setRevealed(true)
   }
 
@@ -46992,6 +48979,42 @@ function CustomApp({ onBack }) {
           </div>
         </>}
 
+        <p className="welcome-text" style={{ marginTop: '14px', fontSize: '0.92rem', fontWeight: 700, marginBottom: '6px' }}>Practice Goal:</p>
+        <div className="checkbox-group" style={{ marginBottom: '8px' }}>
+          {[
+            { key: 'standard', label: 'Standard' },
+            { key: 'speed',    label: '⚡ Speed Run' },
+            { key: 'perfect',  label: '🎯 Perfect Solve' },
+            { key: 'revision', label: '🔄 Revision' },
+          ].map(g => (
+            <label key={g.key} className={`checkbox-pill${sessionGoal === g.key ? ' active' : ''}`}
+              style={sessionGoal === g.key ? (
+                g.key === 'speed'    ? { background: 'rgba(255,179,0,0.18)',  borderColor: '#ffb300', color: '#ffb300' } :
+                g.key === 'perfect'  ? { background: 'rgba(244,67,54,0.18)',  borderColor: '#f44336', color: '#f44336' } :
+                g.key === 'revision' ? { background: 'rgba(33,150,243,0.18)', borderColor: '#2196f3', color: '#2196f3' } : {}
+              ) : {}}>
+              <input type="radio" name="customapp-goal" checked={sessionGoal === g.key}
+                onChange={() => setSessionGoal(g.key)} />
+              {g.label}
+            </label>
+          ))}
+        </div>
+        {sessionGoal === 'speed' && (
+          <p style={{ fontSize: '0.82rem', color: '#ffb300', marginBottom: '8px' }}>
+            ⚡ Easy 5s · Medium 10s · Hard 15s · Extra Hard 20s · Adaptive 10s. Double coins for correct!
+          </p>
+        )}
+        {sessionGoal === 'perfect' && (
+          <p style={{ fontSize: '0.82rem', color: '#f44336', marginBottom: '8px' }}>
+            🎯 One wrong answer ends the quiz. No timer shown. Can you go flawless?
+          </p>
+        )}
+        {sessionGoal === 'revision' && (
+          <p style={{ fontSize: '0.82rem', color: '#2196f3', marginBottom: '8px' }}>
+            🔄 Focuses on topics you previously answered incorrectly.
+          </p>
+        )}
+
         <div className="question-count-row">
           <label className="question-count-label">How many questions?</label>
           <input className="answer-input question-count-input" type="text" value={numQuestions} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setNumQuestions(v) }} />
@@ -47006,9 +49029,9 @@ function CustomApp({ onBack }) {
   // ─── Quiz Phase ──────────────────────────────────────
   if (phase === 'quiz') {
     return (
-      <QuizLayout title="Custom Lesson" subtitle={`${selected.length} puzzle types · ${difficulty}`} onBack={onBack}>
+      <QuizLayout title="Custom Lesson" subtitle={`${selected.length} puzzle types · ${difficulty}`} onBack={onBack} timer={sessionGoal !== 'perfect' ? timer : null} sessionGoal={sessionGoal}>
         <div className="top-mini-row">
-          {!revealed && <div className="timer-pill">{timer.elapsed}s</div>}
+          {!revealed && sessionGoal !== 'perfect' && <div className="timer-pill">{timer.elapsed}s</div>}
           <div className="score-pill">Score: {score}</div>
         </div>
         <div className="progress-pill center">Question {qIndex + 1}/{totalQ}</div>
@@ -48206,6 +50229,7 @@ function Tatsavit1App({ onBack }) {
   const [score, setScore] = useState(0)
   const [results, setResults] = useState([])
   const [finished, setFinished] = useState(false)
+  const [sessionGoal, setSessionGoal] = useState('standard')
 
   const total = TATSAVIT1_QUESTIONS.length
   const q = TATSAVIT1_QUESTIONS[idx]
@@ -48680,6 +50704,7 @@ function RiyaApp({ onBack }) {
   // within activeIndices): { selected, revealed }. Lets Back navigation
   // restore the student's earlier picks so they can review what they did.
   const [perQuestion, setPerQuestion] = useState([])
+  const [sessionGoal, setSessionGoal] = useState('standard')
 
   const totalUnits = RIYA_UNITS.length
   const unit = RIYA_UNITS[unitIdx]
@@ -48787,7 +50812,27 @@ function RiyaApp({ onBack }) {
   }, [phase, revealed, selected, optionOrder, quizIdx, unitIdx, perQuestion, activeIndices])
 
   // ── Helpers ─────────────────────────────────────────────────────
-  const startQuiz = () => {
+  
+  const handleTimeout = async () => {
+    if (typeof revealed !== 'undefined' && revealed) return
+    if (typeof finished !== 'undefined' && finished) return
+    try { if (typeof setIsCorrect !== 'undefined') setIsCorrect(false) } catch(_) {}
+    try { if (typeof setRevealed !== 'undefined') setRevealed(true) } catch(_) {}
+    try { if (typeof setFeedback !== 'undefined') setFeedback('⏰ Time\'s up! Speed run requires a quick answer.') } catch(_) {}
+    try {
+      const r = await fetch(`${API}/riya-api/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authGetToken() ? `Bearer ${authGetToken()}` : '' },
+        body: JSON.stringify({ ...(typeof question !== 'undefined' ? question : {}), userAnswer: '', answer: '', sessionGoal })
+      })
+      const d = await r.json()
+      if (sessionGoal === 'perfect') {
+        try { setFinished(true); timer.reset() } catch(_) {}
+      }
+    } catch(e) { console.error('handleTimeout error:', e) }
+  }
+
+const startQuiz = () => {
     setPhase('quiz')
     setQuizIdx(0)
     setPerQuestion([])
@@ -49117,6 +51162,7 @@ function TatsavitLineApp({ onBack }) {
   const [justSolved, setJustSolved] = useState(false)
   // Visible domain on each axis (±zoom units). Smaller = zoomed in.
   const [zoom, setZoom] = useState(10)
+  const [sessionGoal, setSessionGoal] = useState('standard')
   const svgRef = useRef(null)
 
   // Regenerate random points when `round` changes
@@ -49556,12 +51602,67 @@ function TatsavitLineApp({ onBack }) {
  * @param {Function} props.onBack - Callback when back button is clicked
  * @param {React.ReactNode} props.children - Quiz content to display
  */
-function QuizLayout({ title, subtitle, onBack, children, timer }) {
+function QuizLayout({ title, subtitle, onBack, children, timer, sessionGoal }) {
+  // Derive display values from the timer object
+  const isSpeed   = timer && (timer.mode === 'speed'   || sessionGoal === 'speed')
+  const isPerfect = sessionGoal === 'perfect'
+
+  // For speed mode: show remaining seconds with urgency colouring
+  const timerDisplay = (() => {
+    if (!timer) return null
+    if (isPerfect) return null // hide timer entirely for perfect solve
+    if (isSpeed) {
+      const left = timer.remaining ?? 0
+      const urgent = left <= 3
+      const warn   = left <= 5 && !urgent
+      const color  = urgent ? '#f44336' : warn ? '#ff9800' : '#4caf50'
+      return (
+        <div className="timer-pill" style={{
+          background: urgent ? 'rgba(244,67,54,0.15)' : warn ? 'rgba(255,152,0,0.15)' : undefined,
+          borderColor: color, color,
+          fontWeight: 700,
+          fontSize: '1rem',
+          minWidth: 56,
+          textAlign: 'center',
+          transition: 'color 0.3s, background 0.3s',
+          animation: urgent ? 'timerPulse 0.5s ease-in-out infinite alternate' : 'none',
+        }}>
+          ⚡ {left}s
+        </div>
+      )
+    }
+    // Standard / revision — count-up
+    return <div className="timer-pill">{timer.elapsed}s</div>
+  })()
+
+  // Goal mode badge
+  const goalBadge = (() => {
+    if (!sessionGoal || sessionGoal === 'standard') return null
+    const cfg = {
+      speed:    { label: '⚡ Speed Run',     bg: 'rgba(255,179,0,0.18)', border: '#ffb300', color: '#ffb300' },
+      perfect:  { label: '🎯 Perfect Solve', bg: 'rgba(244,67,54,0.18)', border: '#f44336', color: '#f44336' },
+      revision: { label: '🔄 Revision',      bg: 'rgba(33,150,243,0.18)', border: '#2196f3', color: '#2196f3' },
+    }[sessionGoal]
+    if (!cfg) return null
+    return (
+      <div style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        padding: '2px 10px', borderRadius: 20, fontSize: '0.78rem', fontWeight: 600,
+        background: cfg.bg, border: `1.5px solid ${cfg.border}`, color: cfg.color,
+      }}>
+        {cfg.label}
+      </div>
+    )
+  })()
+
   return (
     <>
       <div className="header-row">
         <button className="back-button" onClick={onBack}>← Home</button>
-        {timer && <div className="timer-pill">{timer.elapsed}s</div>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {goalBadge}
+          {timerDisplay}
+        </div>
       </div>
       <h1>{title}</h1>
       <p className="subtitle">{subtitle}</p>

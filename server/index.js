@@ -125,6 +125,187 @@ app.use((req, res, next) => {
   next();
 });
 
+// ─── LIL INTERCEPTOR MIDDLEWARE ──────────────────────────────────────────────
+const jwt = require('jsonwebtoken');
+const lilProcess = require('./lil/processAttempt');
+const { User } = require('./auth');
+
+app.use(async (req, res, next) => {
+  // Only intercept POST requests to check endpoints
+  if (req.method !== 'POST' || !req.path.includes('-api/check')) {
+    return next();
+  }
+
+  // Skip if it is a solve request (since we only log standard attempts)
+  if (req.body && req.body.solve === true) {
+    return next();
+  }
+
+  // Resolve User ID from Bearer token
+  let userId = null;
+  const authHeader = req.get('authorization') || '';
+  const m = /^Bearer\s+(.+)$/i.exec(authHeader);
+  if (m) {
+    try {
+      const JWT_SECRET = process.env.JWT_SECRET || 'tenali-dev-secret-change-me';
+      const payload = jwt.verify(m[1], JWT_SECRET);
+      userId = payload.sub;
+    } catch (e) {
+      console.warn('[LIL] JWT verify failed:', e.message);
+    }
+  }
+
+  // Fallback: Resolve to seeded 'tatsavit' user if no token or invalid token
+  if (!userId) {
+    try {
+      const tatsavitUser = await User.findOne({ username: 'tatsavit' });
+      if (tatsavitUser) {
+        userId = tatsavitUser._id.toString();
+      }
+    } catch (e) {
+      console.error('[LIL] Fallback user lookup failed:', e.message);
+    }
+  }
+
+  // Extract topicId (e.g. "/addition-api/check" -> "addition")
+  const pathParts = req.path.split('/');
+  const apiName = pathParts[1] || '';
+  const topicId = apiName.replace('-api', '');
+
+  // Intercept response JSON
+  const originalJson = res.json.bind(res);
+  res.json = function (data) {
+    // Restore res.json to avoid recursion
+    res.json = originalJson;
+
+    // Async LIL execution wrapper
+    if (userId && topicId) {
+      const payloadInput = {
+        userId,
+        topicId,
+        difficulty: req.query.difficulty || req.body.difficulty || 'easy',
+        userAnswer: req.body.userAnswer ?? req.body.answer ?? '',
+        isCorrect: !!data.correct,
+        sessionGoal: req.body.sessionGoal || 'standard',
+        telemetry: req.body.telemetry || {},
+        prompt: req.body.prompt || '',
+        correctAnswer: req.body.correctAnswer ?? req.body.answer ?? data.correctAnswer ?? data.display ?? '',
+        display: req.body.display ?? data.display ?? '',
+        options: req.body.options || null,
+        questionData: req.body
+      };
+
+      lilProcess.processAttempt(payloadInput)
+        .then(lilResult => {
+          // Append LIL outcomes to the client response payload
+          data.lil = lilResult;
+          originalJson(data);
+        })
+        .catch(err => {
+          console.error('[LIL] processAttempt failed:', err);
+          originalJson(data);
+        });
+    } else {
+      originalJson(data);
+    }
+  };
+
+  next();
+});
+
+// ─── LIL GET QUESTION REVISION INTERCEPTOR ───────────────────────────────────
+app.use(async (req, res, next) => {
+  // Only intercept GET requests to question endpoints when goal is revision
+  if (req.method !== 'GET' || !req.path.includes('-api/question') || req.query.goal !== 'revision') {
+    return next();
+  }
+
+  // Resolve User ID from Bearer token
+  let userId = null;
+  const authHeader = req.get('authorization') || '';
+  const m = /^Bearer\s+(.+)$/i.exec(authHeader);
+  if (m) {
+    try {
+      const JWT_SECRET = process.env.JWT_SECRET || 'tenali-dev-secret-change-me';
+      const payload = jwt.verify(m[1], JWT_SECRET);
+      userId = payload.sub;
+    } catch (e) {
+      console.warn('[LIL GET] JWT verify failed:', e.message);
+    }
+  }
+
+  // Fallback: Resolve to seeded 'tatsavit' user if no token or invalid token
+  if (!userId) {
+    try {
+      const tatsavitUser = await User.findOne({ username: 'tatsavit' });
+      if (tatsavitUser) {
+        userId = tatsavitUser._id.toString();
+      }
+    } catch (e) {
+      console.error('[LIL GET] Fallback user lookup failed:', e.message);
+    }
+  }
+
+  // Extract topicId (e.g. "/addition-api/question" -> "addition")
+  const pathParts = req.path.split('/');
+  const apiName = pathParts[1] || '';
+  const topicId = apiName.replace('-api', '');
+
+  if (userId && topicId) {
+    try {
+      const mongoose = require('mongoose');
+      const { Attempt } = require('./lil/models');
+      
+      const unresolved = await Attempt.aggregate([
+        { $match: { 
+            userId: new mongoose.Types.ObjectId(userId), 
+            topicId, 
+            prompt: { $exists: true, $ne: null } 
+          } 
+        },
+        { $sort: { createdAt: -1 } },
+        { $group: {
+            _id: "$prompt",
+            latestAttempt: { $first: "$$ROOT" }
+        } },
+        { $match: { "latestAttempt.isCorrect": false } },
+        { $sort: { "latestAttempt.createdAt": -1 } }
+      ]);
+
+      const lastFailed = unresolved.length > 0 ? unresolved[0].latestAttempt : null;
+
+      if (lastFailed && lastFailed.prompt) {
+        console.log(`[LIL GET] Serving revision question from unresolved failed attempt: ${lastFailed._id}`);
+        if (lastFailed.questionData) {
+          // Exclude _id if there is any to prevent conflict, but copy everything else
+          const qData = { ...lastFailed.questionData };
+          delete qData._id;
+          return res.json({
+            ...qData,
+            isRevision: true
+          });
+        }
+        return res.json({
+          id: `rev-${lastFailed._id}-${Date.now()}`,
+          difficulty: lastFailed.difficulty || 'easy',
+          prompt: lastFailed.prompt,
+          answer: lastFailed.correctAnswer,
+          display: lastFailed.display || String(lastFailed.correctAnswer),
+          options: lastFailed.options || undefined,
+          isRevision: true
+        });
+      }
+    } catch (err) {
+      console.error('[LIL GET] Failed to fetch revision question:', err);
+    }
+  }
+
+  // If no failed attempts are found, proceed to normal question generation!
+  next();
+});
+
+
+
 /**
  * Generate a detailed, educational step-by-step explanation for how to solve the problem.
  * Covers all ~60 puzzle types with contextual teaching.
