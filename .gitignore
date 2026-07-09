@@ -3,3 +3,5 @@ node_modules
 client/dist
 server.log
 docs/
+docs/feature_walkthrough/
+docs/implementation_plans/
