@@ -36408,50 +36408,6 @@ function Home({ onSelect, completedTopics = [], goldMastery = [], coins = 0 }) {
         })}
       </div>
       <div className="grid-dimension">{rows} × {cols}</div>
-
-      {/* Developer Cheat / Debug Controls */}
-      <div style={{ marginTop: '24px', paddingTop: '16px', borderTop: '1px dashed var(--clr-border)', display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
-        <span style={{ fontSize: '0.78rem', color: 'var(--clr-text-soft)', width: '100%', textAlign: 'center' }}>Developer Debug Controls:</span>
-        <button 
-          style={{ fontSize: '0.75rem', padding: '6px 12px', background: 'var(--clr-hover-strong)', border: '1px solid var(--clr-border)', color: 'var(--clr-text)', borderRadius: '6px', cursor: 'pointer' }}
-          onClick={() => {
-            const topic = prompt("Enter topic key to toggle Stage 3 Mastery (e.g. percent, ratio, fractionadd):");
-            if (topic) {
-              const cleaned = topic.trim().toLowerCase();
-              const isComp = completedTopics.includes(cleaned) || 
-                             (completedTopics.includes(`${cleaned}-easy`) && 
-                              completedTopics.includes(`${cleaned}-medium`) && 
-                              completedTopics.includes(`${cleaned}-hard`));
-              if (isComp) {
-                const next = completedTopics.filter(t => t !== cleaned && t !== `${cleaned}-easy` && t !== `${cleaned}-medium` && t !== `${cleaned}-hard`);
-                localStorage.setItem('tenali-completed-topics', JSON.stringify(next));
-                window.location.reload();
-              } else {
-                const next = [...completedTopics, cleaned, `${cleaned}-easy`, `${cleaned}-medium`, `${cleaned}-hard`].filter((v, i, a) => a.indexOf(v) === i);
-                localStorage.setItem('tenali-completed-topics', JSON.stringify(next));
-                window.location.reload();
-              }
-            }
-          }}
-        >
-          ⚙️ Toggle Stage 3 Mastery
-        </button>
-
-        <button 
-          style={{ fontSize: '0.75rem', padding: '6px 12px', background: 'var(--clr-hover-strong)', border: '1px solid var(--clr-border)', color: 'var(--clr-text)', borderRadius: '6px', cursor: 'pointer' }}
-          onClick={() => {
-            localStorage.removeItem('tenali-completed-topics');
-            localStorage.removeItem('tenali-gold-mastery');
-            localStorage.removeItem('tenali-coins');
-            localStorage.removeItem('tenali-guest-transfer-correct-percent');
-            localStorage.removeItem('tenali-guest-transfer-correct-ratio');
-            localStorage.removeItem('tenali-guest-transfer-correct-fractionadd');
-            window.location.reload();
-          }}
-        >
-          🔄 Reset All Progress
-        </button>
-      </div>
     </>
   )
 }
