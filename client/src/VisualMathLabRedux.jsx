@@ -4,6 +4,7 @@
  * Requires: framer-motion, canvas-confetti
  */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Medal, Cloud, Sun, Sprout, Settings, CheckCircle2, XCircle, MousePointer2, Sparkles, Rocket, PartyPopper, Lightbulb, Flag, Trophy, RefreshCw, Calculator, Gift, Package, Bug } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import confetti from 'canvas-confetti';
 
@@ -89,7 +90,7 @@ function RibbonPopup({ show }) {
           style={{ position:'fixed', top:0, left:'50%', zIndex:9999, pointerEvents:'none' }}
         >
           <div style={{ background:'linear-gradient(135deg, #10b981, #059669)', padding:'14px 70px', borderRadius:'0 0 30px 30px', boxShadow:'0 15px 40px rgba(16, 185, 129, 0.5)', border:'2px solid rgba(255,255,255,0.3)', borderTop:'none', color:'white', fontSize:'2rem', fontWeight:900, fontFamily:FONT, display:'flex', alignItems:'center', gap:'16px', textShadow:'0 3px 6px rgba(0,0,0,0.3)' }}>
-            <span>🏅</span> BRILLIANT! <span>🏅</span>
+            <Medal size={32} className="inline-icon" /> BRILLIANT! <Medal size={32} className="inline-icon" />
           </div>
         </motion.div>
       )}
@@ -181,12 +182,12 @@ function FrogJumpTemplate({ q, ans, setAns, revealed }) {
       <div style={{ width:'100%', background:'linear-gradient(180deg,#052e16 0%,#14532d 100%)', borderRadius:'20px', padding:'28px 20px 36px', position:'relative', overflow:'hidden', boxShadow:'0 15px 40px rgba(0,0,0,0.4)' }}>
         {/* Sky details */}
         {[{l:4,t:4,s:1.1},{l:52,t:6,s:0.8},{l:74,t:3,s:1}].map((c,i)=>(
-          <motion.div key={i} style={{position:'absolute',left:`${c.l}%`,top:`${c.t}%`,fontSize:`${c.s*2.2}rem`,opacity:0.3}} animate={{x:[0,18,0]}} transition={{duration:12+i*3,repeat:Infinity,ease:'easeInOut'}}>☁️</motion.div>
+          <motion.div key={i} style={{position:'absolute',left:`${c.l}%`,top:`${c.t}%`,fontSize:`${c.s*2.2}rem`,opacity:0.3}} animate={{x:[0,18,0]}} transition={{duration:12+i*3,repeat:Infinity,ease:'easeInOut'}}><Cloud /></motion.div>
         ))}
-        <div style={{position:'absolute',top:'6%',right:'4%',fontSize:'2rem',opacity:0.4}}>☀️</div>
+        <div style={{position:'absolute',top:'6%',right:'4%',fontSize:'2rem',opacity:0.4}}><Sun /></div>
         {[8,32,58,84].map((l,i)=>(
           <div key={i} style={{position:'absolute',bottom:'22px',left:`${l}%`,fontSize:'1.1rem',opacity:0.55}}>
-            {['🌸','🌼','🌺','🌻'][i]}
+            {['<Sprout />','<Sprout />','<Sprout />','<Sprout />'][i]}
           </div>
         ))}
 
@@ -299,7 +300,7 @@ function FrogJumpTemplate({ q, ans, setAns, revealed }) {
       {frogPos === 0 && !revealed && (
         <motion.p animate={{ opacity:[0.5,1,0.5] }} transition={{ duration:2, repeat:Infinity }}
           style={{ color:C.muted, fontSize:'0.9rem', fontFamily:FONT, textAlign:'center', margin:0 }}>
-          🐸 Drag Freddy to where he'll land after {q.jumps} jumps!
+          <Bug className="inline-icon text-green-500" /> Drag Freddy to where he'll land after {q.jumps} jumps!
         </motion.p>
       )}
       {frogPos > 0 && (
@@ -330,12 +331,12 @@ function MathMachineTemplate({ q, ans, setAns, revealed }) {
         transition={{ type:'spring', stiffness:200, damping:15, delay:0.2 }}
         style={{ background:'#0f172a', border:'4px solid #334155', borderRadius:'24px', padding:'18px 30px', display:'flex', alignItems:'center', gap:'14px', boxShadow:'0 0 40px rgba(0,0,0,0.5)', position:'relative' }}>
         <div style={{ position:'absolute', inset:-1, borderRadius:'24px', background:'linear-gradient(135deg,rgba(79,141,255,0.12),transparent)', pointerEvents:'none' }}/>
-        <motion.span style={{ fontSize:'2.6rem' }} animate={{ rotate:360 }} transition={{ duration:4, repeat:Infinity, ease:'linear' }}>⚙️</motion.span>
+        <motion.span style={{ fontSize:'2.6rem' }} animate={{ rotate:360 }} transition={{ duration:4, repeat:Infinity, ease:'linear' }}><Settings size={40} /></motion.span>
         <div style={{ background:'#020617', border:'2px inset #1e293b', borderRadius:'12px', padding:'8px 18px', textAlign:'center' }}>
           <div style={{ fontSize:'0.65rem', fontFamily:FONT, color:'#475569', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.1em' }}>Function</div>
           <div style={{ fontSize:'2.1rem', fontWeight:900, fontFamily:FONT, color:'#22d3ee', textShadow:'0 0 12px rgba(34,211,238,0.8)' }}>×{q.multiplier}</div>
         </div>
-        <motion.span style={{ fontSize:'2.6rem' }} animate={{ rotate:-360 }} transition={{ duration:3, repeat:Infinity, ease:'linear' }}>⚙️</motion.span>
+        <motion.span style={{ fontSize:'2.6rem' }} animate={{ rotate:-360 }} transition={{ duration:3, repeat:Infinity, ease:'linear' }}><Settings size={40} /></motion.span>
       </motion.div>
 
       <motion.div animate={{ y:[0,8,0] }} transition={{ duration:1.5, repeat:Infinity, delay:0.3 }} style={{ color:C.orange, fontSize:'1.7rem', lineHeight:1 }}>↓</motion.div>
@@ -362,7 +363,7 @@ function PlantArrayTemplate({ q, ans, setAns, revealed }) {
   return (
     <div style={{ background:'linear-gradient(135deg,#052e16,#14532d)', borderRadius:'20px', padding:'26px 22px', display:'flex', flexDirection:'column', alignItems:'center', gap:'14px', boxShadow:'0 15px 40px rgba(0,0,0,0.4)' }}>
       <p style={{ color:'#86efac', fontFamily:FONT, fontWeight:700, margin:0, fontSize:'0.9rem' }}>
-        {revealed ? `✅ ${total} plants!` : '👆 Tap each patch to plant a seed!'}
+        {revealed ? <><CheckCircle2 className="inline-icon text-green-500" /> {total} plants!</> : <><MousePointer2 className="inline-icon" /> Tap each patch to plant a seed!</>}
       </p>
       <div style={{ display:'grid', gridTemplateColumns:`repeat(${q.cols},1fr)`, gap:'10px', background:'rgba(0,0,0,0.2)', padding:'14px', borderRadius:'14px' }}>
         {Array.from({ length: total }).map((_, i) => (
@@ -387,10 +388,10 @@ function CandySharingTemplate({ q, ans, setAns, revealed }) {
     <div style={{ background:'linear-gradient(135deg,#451a03,#78350f)', borderRadius:'20px', padding:'26px 22px', display:'flex', flexDirection:'column', alignItems:'center', gap:'14px', boxShadow:'0 15px 40px rgba(0,0,0,0.4)' }}>
       <motion.div onClick={share} whileHover={{ scale:1.15 }} whileTap={{ scale:0.9 }}
         style={{ fontSize:'3.4rem', cursor:revealed?'default':'pointer', filter:'drop-shadow(0 4px 12px rgba(249,115,22,0.5))' }}>
-        {shared < q.total ? q.emoji : '✨'}
+        {shared < q.total ? q.emoji : '<Sparkles className="inline-icon" />'}
       </motion.div>
       <p style={{ color:'#fcd34d', fontFamily:FONT, fontWeight:700, margin:0, fontSize:'0.88rem' }}>
-        {revealed ? `✅ ${q.total/q.boxes} per basket!` : `Tap to share! (${shared}/${q.total})`}
+        {revealed ? <><CheckCircle2 className="inline-icon text-green-500" /> {q.total/q.boxes} per basket!</> : `Tap to share! (${shared}/${q.total})`}
       </p>
       <div style={{ display:'flex', gap:'14px', flexWrap:'wrap', justifyContent:'center' }}>
         {Array.from({ length: q.boxes }).map((_, i) => {
@@ -505,7 +506,7 @@ function AnswerInput({ ans, setAns, submitAns, revealed, correctAnswer, shake, o
           {revealed && (
             <motion.div initial={{ scale:0, rotate:-30 }} animate={{ scale:1, rotate:0 }}
               transition={{ type:'spring', stiffness:400 }} style={{ fontSize:'2.6rem' }}>
-              {isRight ? '✅' : '❌'}
+              {isRight ? <CheckCircle2 className="inline-icon text-green-500" /> : <XCircle className="inline-icon text-red-500" />}
             </motion.div>
           )}
         </div>
@@ -540,7 +541,7 @@ function ResultsTable({ results }) {
               <td style={{ padding:'7px 10px', color:C.muted }}>{i+1}</td>
               <td style={{ padding:'7px 10px', color:C.white }}>{r.question}</td>
               <td style={{ padding:'7px 10px', color:C.white }}>{r.userAnswer}</td>
-              <td style={{ padding:'7px 10px' }}>{r.correct?<span style={{color:C.green}}>✓</span>:<span style={{color:C.red}}>✗</span>}</td>
+              <td style={{ padding:'7px 10px' }}>{r.correct?<span style={{color:C.green}}><CheckCircle2 size={16} /></span>:<span style={{color:C.red}}><XCircle size={16} /></span>}</td>
               <td style={{ padding:'7px 10px', color:C.muted }}>{r.time}s</td>
             </tr>
           ))}
@@ -563,11 +564,11 @@ const Card = ({ children, style }) => (
 /* ── MAIN EXPORT ───────────────────────────────────────────────── */
 const TEMPLATE_LABELS = {
   plant_arrays:  '🌱 Planting Arrays',
-  frog_jumps:    '🐸 Frog Jumps',
-  candy_sharing: '🍬 Candy Sharing',
-  equal_groups:  '🍪 Equal Groups',
-  picture_multi: '🚀 Picture Math',
-  math_machine:  '⚙️ Math Machine',
+  frog_jumps:    '<Bug className="inline-icon text-green-500" /> Frog Jumps',
+  candy_sharing: '<Gift className="inline-icon" /> Candy Sharing',
+  equal_groups:  '<Package className="inline-icon" /> Equal Groups',
+  picture_multi: '<Rocket className="inline-icon" /> Picture Math',
+  math_machine:  '<Settings size={40} /> Math Machine',
 };
 
 export default function VisualMathLabRedux({ onBack }) {
@@ -630,7 +631,7 @@ export default function VisualMathLabRedux({ onBack }) {
       setShake(true);
       setTimeout(() => setShake(false), 600);
     }
-    setFeedback(data.correct ? `Correct! 🎉 The answer is ${data.correctAnswer}.` : `Not quite! The answer is ${data.correctAnswer}.`);
+    setFeedback(data.correct ? `Correct! <PartyPopper className="inline-icon" /> The answer is ${data.correctAnswer}.` : `Not quite! The answer is ${data.correctAnswer}.`);
     setResults(prev => [...prev, { question:question.prompt, userAnswer:finalAns, correctAnswer:data.correctAnswer, correct:data.correct, time:timeTaken }]);
     setRevealed(true);
   };
@@ -672,7 +673,7 @@ export default function VisualMathLabRedux({ onBack }) {
         {!started && !finished && (
           <Card key="start" style={{ textAlign:'center', marginTop:'8vh' }}>
             <motion.div initial={{ scale:0 }} animate={{ scale:1 }} transition={{ type:'spring', stiffness:300, delay:0.2 }}
-              style={{ fontSize:'4.5rem', marginBottom:'10px' }}>✨</motion.div>
+              style={{ fontSize:'4.5rem', marginBottom:'10px' }}><Sparkles className="inline-icon" /></motion.div>
             <h1 style={{ fontSize:'2.9rem', fontWeight:900, margin:'0 0 8px',
               background:`linear-gradient(135deg,${C.orange},${C.orange2})`,
               WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent' }}>
@@ -711,7 +712,7 @@ export default function VisualMathLabRedux({ onBack }) {
                 style={{ background:`linear-gradient(135deg,${C.orange},${C.orange2})`, border:'none', borderRadius:'18px',
                   padding:'18px 48px', color:'white', fontFamily:FONT, fontWeight:800, fontSize:'1.2rem', cursor:'pointer',
                   boxShadow:'0 10px 28px rgba(249,115,22,0.35)' }}>
-                Start Lab 🚀
+                Start Lab <Rocket className="inline-icon" />
               </motion.button>
               <motion.button onClick={onBack} whileHover={{ scale:1.03 }} whileTap={{ scale:0.97 }}
                 style={{ background:'rgba(255,255,255,0.05)', border:`2px solid ${C.border}`, borderRadius:'18px',
@@ -771,7 +772,7 @@ export default function VisualMathLabRedux({ onBack }) {
                 <span style={{ background:'rgba(249,115,22,0.14)', border:'1px solid rgba(249,115,22,0.28)', borderRadius:'8px',
                   padding:'4px 12px', fontSize:'0.75rem', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.1em',
                   color:C.orange, fontFamily:FONT }}>
-                  {TEMPLATE_LABELS[question.template] || '🧮 Math'}
+                  {TEMPLATE_LABELS[question.template] || <><Calculator className="inline-icon" /> Math</>}
                 </span>
               </div>
             )}
@@ -823,7 +824,7 @@ export default function VisualMathLabRedux({ onBack }) {
                     background: isCorrect?'rgba(34,197,94,0.08)':'rgba(239,68,68,0.08)',
                     border:`2px solid ${isCorrect?'rgba(34,197,94,0.35)':'rgba(239,68,68,0.35)'}`,
                     fontSize:'0.98rem', fontWeight:700, color: isCorrect?'#86efac':'#fca5a5', fontFamily:FONT, textAlign:'center' }}>
-                  {isCorrect ? '🎉 ' : '💡 '}{feedback}
+                  {isCorrect ? '<PartyPopper className="inline-icon" /> ' : '<Lightbulb className="inline-icon" /> '}{feedback}
                 </motion.div>
               )}
             </AnimatePresence>
@@ -839,7 +840,7 @@ export default function VisualMathLabRedux({ onBack }) {
                       border:'none', borderRadius:'16px', padding:'16px 20px',
                       color: loading||!answer?C.muted:'white', fontFamily:FONT, fontWeight:800, fontSize:'1rem',
                       cursor: loading||!answer?'not-allowed':'pointer', boxShadow: loading||!answer?'none':'0 8px 24px rgba(249,115,22,0.32)', transition:'all 0.2s' }}>
-                    Submit ✓
+                    Submit <CheckCircle2 size={16} />
                   </motion.button>
                   <motion.button onClick={handleSolve} whileHover={{ scale:1.02 }} whileTap={{ scale:0.97 }}
                     style={{ background:'rgba(255,255,255,0.05)', border:`2px solid rgba(255,255,255,0.1)`,
@@ -854,7 +855,7 @@ export default function VisualMathLabRedux({ onBack }) {
                   style={{ flex:1, background:`linear-gradient(135deg,${C.orange},${C.orange2})`, border:'none',
                     borderRadius:'16px', padding:'18px 22px', color:'white', fontFamily:FONT, fontWeight:800,
                     fontSize:'1.05rem', cursor:'pointer', boxShadow:'0 8px 24px rgba(249,115,22,0.35)' }}>
-                  {questionNumber >= totalQ ? 'Finish Lab 🏁' : 'Next Question →'}
+                  {questionNumber >= totalQ ? <><Flag className="inline-icon" /> Finish Lab</> : 'Next Question →'}
                 </motion.button>
               )}
             </div>
@@ -872,7 +873,7 @@ export default function VisualMathLabRedux({ onBack }) {
         {finished && (
           <Card key="finish" style={{ textAlign:'center', marginTop:'8vh' }}>
             <motion.div animate={{ y:[0,-18,0], rotate:[0,8,-8,0] }} transition={{ duration:1.4, repeat:Infinity }}
-              style={{ fontSize:'5rem', marginBottom:'14px' }}>🏆</motion.div>
+              style={{ fontSize:'5rem', marginBottom:'14px' }}><Trophy size={64} className="inline-icon text-yellow-500" /></motion.div>
             <h1 style={{ fontSize:'2.8rem', fontWeight:900, color:C.white, margin:'0 0 8px' }}>Lab Complete!</h1>
             <p style={{ fontSize:'1.25rem', color:C.muted, margin:'0 0 12px' }}>
               Final Score: <span style={{ color:C.orange, fontWeight:900 }}>{score} / {totalQ}</span>
@@ -888,7 +889,7 @@ export default function VisualMathLabRedux({ onBack }) {
                 style={{ background:`linear-gradient(135deg,${C.orange},${C.orange2})`, border:'none', borderRadius:'16px',
                   padding:'16px 32px', color:'white', fontFamily:FONT, fontWeight:800, fontSize:'1rem', cursor:'pointer',
                   boxShadow:'0 8px 24px rgba(249,115,22,0.35)' }}>
-                Play Again 🔄
+                Play Again <RefreshCw className="inline-icon" />
               </motion.button>
               <motion.button onClick={onBack} whileHover={{ scale:1.03 }} whileTap={{ scale:0.97 }}
                 style={{ background:'rgba(255,255,255,0.05)', border:`2px solid ${C.border}`, borderRadius:'16px',
