@@ -44,12 +44,12 @@ const percentScenarios = [
       return {
         scenarioId: 'pct-transfer-001',
         context: 'shopping',
-        prompt: `${name} wants to buy a ${item} that costs ₹${price}. The shop offers a ${discount}% discount. A sales tax of ${gst}% is added after the discount. What is the final price?`,
+        prompt: `${name} wants to buy a ${item} priced at ₹${price}. The store offers a ${discount}% discount. After the discount, ${gst}% GST is applied. What is the final price?`,
         variables: vars,
         hints: [
-          `Hint 1 — Observation 👀: Think about the starting price first. What is the discount percent and the tax percent?`,
-          `Hint 2 — Strategy 🧠: Find the price after the discount is subtracted, then find the new price after the tax is added.`,
-          `Hint 3 — Gentle Nudge 💡: Start by calculating the discount amount on the original price.`
+          'Break this into steps: first find the discounted price, then apply the GST to that discounted price.',
+          `The discount is ${discount}% of ₹${price} (which is ₹${res.discountAmt}). The discounted price is ₹${price} - ₹${res.discountAmt} = ₹${res.discountedDisplay}. Now find the GST.`,
+          `The GST is ${gst}% of ₹${res.discountedDisplay} (which is ₹${res.gstAmt}). Add this to the discounted price to get the final answer.`
         ]
       };
     },
@@ -57,9 +57,9 @@ const percentScenarios = [
     explanation: (vars) => {
       const res = evaluatePct001(vars);
       return `Step 1: Find ${vars.discount}% discount on ₹${vars.price} → ₹${res.discountAmt}\n` +
-             `Step 2: Subtract discount → ₹${vars.price} - ₹${res.discountAmt} = ₹${res.discountedDisplay}\n` +
-             `Step 3: Find ${vars.gst}% GST on ₹${res.discountedDisplay} → ₹${res.gstAmt}\n` +
-             `Step 4: Add GST → ₹${res.discountedDisplay} + ₹${res.gstAmt} = ₹${res.answer}`;
+        `Step 2: Subtract discount → ₹${vars.price} - ₹${res.discountAmt} = ₹${res.discountedDisplay}\n` +
+        `Step 3: Find ${vars.gst}% GST on ₹${res.discountedDisplay} → ₹${res.gstAmt}\n` +
+        `Step 4: Add GST → ₹${res.discountedDisplay} + ₹${res.gstAmt} = ₹${res.answer}`;
     },
     transferMapping: "The word 'discount' means computing a percentage and subtracting. 'GST' (Goods & Services Tax) means computing a percentage and adding to the discounted price."
   },
@@ -85,12 +85,12 @@ const percentScenarios = [
       return {
         scenarioId: 'pct-transfer-002',
         context: 'sports',
-        prompt: `A sports team needs to score ${target} runs to win. In the first ${overs} overs, they score ${rate} runs per over. What percentage of the target runs have they scored so far?`,
+        prompt: `The ${team} cricket team needs to score ${target} runs to win. In the first ${overs} overs, they score at a rate of ${rate} runs per over. What percentage of the target runs have they already scored?`,
         variables: vars,
         hints: [
-          `Hint 1 — Observation 👀: Think about the whole target amount first. How many runs have they scored in each over, and for how many overs?`,
-          `Hint 2 — Strategy 🧠: First find the total runs scored, then find what percentage that is of the target.`,
-          `Hint 3 — Gentle Nudge 💡: Try finding the runs scored in the first few overs by combining the overs and runs per over.`
+          'First calculate the total runs scored in the first few overs by multiplying the run rate by the number of overs.',
+          `They scored ${overs} × ${rate} = ${res.runs} runs. Now, find what percentage ${res.runs} is of ${target}.`,
+          `Calculate (${res.runs} / ${target}) × 100 to get the percentage.`
         ]
       };
     },
@@ -98,7 +98,7 @@ const percentScenarios = [
     explanation: (vars) => {
       const res = evaluatePct002(vars);
       return `Step 1: Calculate runs scored → ${vars.overs} overs × ${vars.rate} runs/over = ${res.runs} runs\n` +
-             `Step 2: Find percentage of target runs → (${res.runs} / ${vars.target}) × 100 = ${res.answer}%`;
+        `Step 2: Find percentage of target runs → (${res.runs} / ${vars.target}) × 100 = ${res.answer}%`;
     },
     transferMapping: "A 'run rate' is the average number of runs scored per over. To find what percentage 'a' is of 'b', compute (a / b) × 100."
   },
@@ -129,12 +129,12 @@ const percentScenarios = [
       return {
         scenarioId: 'pct-transfer-003',
         context: 'cooking',
-        prompt: `A sweet recipe for ${dish} serves ${servings} friends and uses ${sugar}g of sugar. If you want to make it for ${newServings} friends, by what percentage must you increase the sugar?`,
+        prompt: `A recipe for ${dish} serves ${servings} people and requires ${sugar}g of sugar. If you want to make the dish for ${newServings} people, by what percentage must you increase the amount of sugar?`,
         variables: vars,
         hints: [
-          `Hint 1 — Observation 👀: Look at the original number of friends and the new number of friends. Does the exact weight of sugar change the percentage increase?`,
-          `Hint 2 — Strategy 🧠: The percentage increase in sugar is the same as the percentage increase in guests. How do we find percentage increase?`,
-          `Hint 3 — Gentle Nudge 💡: Find how many extra friends you are serving first, and compare that to the starting number of friends.`
+          `Notice that the amount of sugar (${sugar}g) is a distractor! The sugar increase percentage is identical to the servings increase percentage.`,
+          `Calculate the percentage increase in servings from ${servings} to ${newServings}.`,
+          `The formula is: ((New Servings - Original Servings) / Original Servings) × 100.`
         ]
       };
     },
@@ -142,8 +142,8 @@ const percentScenarios = [
     explanation: (vars) => {
       const res = evaluatePct003(vars);
       return `Step 1: Identify that the sugar amount (${vars.sugar}g) is scaled proportionally with servings, so the percentage increase of sugar matches the servings increase.\n` +
-             `Step 2: Servings increase = ${vars.newServings} - ${vars.servings} = ${res.diff}\n` +
-             `Step 3: Percentage increase = (${res.diff} / ${vars.servings}) × 100 = ${res.answer}%`;
+        `Step 2: Servings increase = ${vars.newServings} - ${vars.servings} = ${res.diff}\n` +
+        `Step 3: Percentage increase = (${res.diff} / ${vars.servings}) × 100 = ${res.answer}%`;
     },
     transferMapping: "When scaling quantities proportionally, the percentage change of any single ingredient (like sugar) is equal to the percentage change of the scale (servings). The formula for percentage change is: (change / original) × 100."
   }
@@ -170,12 +170,12 @@ const ratioScenarios = [
       return {
         scenarioId: 'ratio-transfer-001',
         context: 'travel',
-        prompt: `On a map, ${scale} cm represents ${distance} km in real life. If two parks are ${mapDist} cm apart on the map, what is the actual distance between them in km?`,
+        prompt: `On a map of India, ${scale} cm represents ${distance} km in real life. If two cities are ${mapDist} cm apart on the map, what is the actual distance between them in km?`,
         variables: vars,
         hints: [
-          `Hint 1 — Observation 👀: Which two things are being compared? Each centimeter on the map represents a certain real distance.`,
-          `Hint 2 — Strategy 🧠: The comparison should stay the same. Find how many real kilometers 1 cm represents.`,
-          `Hint 3 — Gentle Nudge 💡: Find how many times the map distance has grown from the scale.`
+          `This is a ratio problem. The scale ratio is map distance : actual distance = ${scale} : ${distance}.`,
+          `For 1 cm on the map, the actual distance is ${distance} / ${scale} = ${distance / scale} km.`,
+          `Multiply the 1-cm distance by the map distance (${mapDist} cm) to get the answer.`
         ]
       };
     },
@@ -183,8 +183,8 @@ const ratioScenarios = [
     explanation: (vars) => {
       const res = evaluateRatio001(vars);
       return `Step 1: Establish the scale ratio → ${vars.scale} cm : ${vars.distance} km\n` +
-             `Step 2: Find the distance represented by 1 cm → ${vars.distance} / ${vars.scale} = ${res.unitDist} km\n` +
-             `Step 3: Multiply by the map distance → ${vars.mapDist} cm × ${res.unitDist} km/cm = ${res.answer} km`;
+        `Step 2: Find the distance represented by 1 cm → ${vars.distance} / ${vars.scale} = ${res.unitDist} km\n` +
+        `Step 3: Multiply by the map distance → ${vars.mapDist} cm × ${res.unitDist} km/cm = ${res.answer} km`;
     },
     transferMapping: "A map scale is a ratio of map distance to real-world distance. If a:b represents the scale, and you have map distance c, the real-world distance is c × (b / a)."
   },
@@ -212,12 +212,12 @@ const ratioScenarios = [
       return {
         scenarioId: 'ratio-transfer-002',
         context: 'cooking',
-        prompt: `To mix a fruit drink, the ratio of juice to water is ${pair.juice}:${pair.water}. If you use ${juiceUsed} ml of juice, how much water in ml should you add to keep the comparison the same?`,
+        prompt: `To make a jug of lemonade, the ratio of lemon juice to water is ${pair.juice}:${pair.water}. If you use ${juiceUsed} ml of lemon juice, how much water in ml should you add to keep the same ratio?`,
         variables: vars,
         hints: [
-          `Hint 1 — Observation 👀: Which two things are being compared? Identify the parts of juice and water.`,
-          `Hint 2 — Strategy 🧠: The ratio of juice to water must stay the same. How many times larger is the juice used compared to its ratio part?`,
-          `Hint 3 — Gentle Nudge 💡: Find the growth factor of the juice, and apply it to the water part.`
+          `The parts ratio is juice : water = ${pair.juice} : ${pair.water}.`,
+          `Calculate how many times larger the juice used (${juiceUsed} ml) is than the ratio part (${pair.juice}).`,
+          `Multiply that scaling factor by the water ratio part (${pair.water}) to find the water needed.`
         ]
       };
     },
@@ -225,8 +225,8 @@ const ratioScenarios = [
     explanation: (vars) => {
       const res = evaluateRatio002(vars);
       return `Step 1: Set up the proportion → juice / water = ${vars.juice} / ${vars.water}\n` +
-             `Step 2: Find the scaling multiplier → ${vars.juiceUsed} ml / ${vars.juice} = ${res.scale}\n` +
-             `Step 3: Calculate water required → ${vars.water} parts × ${res.scale} ml/part = ${res.answer} ml`;
+        `Step 2: Find the scaling multiplier → ${vars.juiceUsed} ml / ${vars.juice} = ${res.scale}\n` +
+        `Step 3: Calculate water required → ${vars.water} parts × ${res.scale} ml/part = ${res.answer} ml`;
     },
     transferMapping: "Ratios define proportional relationships. If the ratio is a:b, then juice/water = a/b. When juice becomes J, water becomes J × (b / a) to preserve the ratio."
   },
@@ -263,12 +263,12 @@ const ratioScenarios = [
       return {
         scenarioId: 'ratio-transfer-003',
         context: 'shopping',
-        prompt: `Two friends, Ravi and Priya, share pocket money of ₹${total} in the ratio ${r1}:${r2}. How much more money does Priya get than Ravi?`,
+        prompt: `Ravi and Priya divide their pocket money of ₹${total} in the ratio ${r1}:${r2}. How much more money does Priya get than Ravi, given that Priya gets the larger share?`,
         variables: vars,
         hints: [
-          `Hint 1 — Observation 👀: What is the total money to share, and how many parts does each friend get?`,
-          `Hint 2 — Strategy 🧠: Find the value of one part first by splitting the total money equally among all parts.`,
-          `Hint 3 — Gentle Nudge 💡: Combine the ratio parts to find the total number of parts first.`
+          `First find the value of one part in the ratio. The total ratio parts sum up to ${r1} + ${r2} = ${r1 + r2} parts.`,
+          `One ratio part is worth ₹${total} / ${r1 + r2} = ₹${total / (r1 + r2)}.`,
+          `Calculate the difference in parts between Priya and Ravi (${r2} - ${r1} = ${r2 - r1} parts), and multiply it by the value of one part.`
         ]
       };
     },
@@ -276,10 +276,10 @@ const ratioScenarios = [
     explanation: (vars) => {
       const res = evaluateRatio003(vars);
       return `Step 1: Find total ratio parts → ${vars.r1} + ${vars.r2} = ${res.partsSum}\n` +
-             `Step 2: Find the value of 1 ratio part → ₹${vars.total} / ${res.partsSum} = ₹${res.unitValue}\n` +
-             `Step 3: Find Ravi's share → ${vars.r1} parts × ₹${res.unitValue} = ₹${res.share1}\n` +
-             `Step 4: Find Priya's share → ${vars.r2} parts × ₹${res.unitValue} = ₹${res.share2}\n` +
-             `Step 5: Find the difference → ₹${res.share2} - ₹${res.share1} = ₹${res.answer}`;
+        `Step 2: Find the value of 1 ratio part → ₹${vars.total} / ${res.partsSum} = ₹${res.unitValue}\n` +
+        `Step 3: Find Ravi's share → ${vars.r1} parts × ₹${res.unitValue} = ₹${res.share1}\n` +
+        `Step 4: Find Priya's share → ${vars.r2} parts × ₹${res.unitValue} = ₹${res.share2}\n` +
+        `Step 5: Find the difference → ₹${res.share2} - ₹${res.share1} = ₹${res.answer}`;
     },
     transferMapping: "To divide an amount in ratio a:b, calculate the sum of parts (a + b). Each part is worth Total / (a + b). The difference between the shares is (b - a) × part value."
   }
@@ -300,19 +300,18 @@ const fractionaddScenarios = [
         { f1n: 1, f1d: 2, f2n: 1, f2d: 5 }  // sum 7/10, rem 3/10
       ];
       const opt = options[Math.floor(Math.random() * options.length)];
-      const { f1n, f1d, f2n, f2d } = opt;
-      const vars = { f1n, f1d, f2n, f2d };
+      const vars = { f1n: opt.f1n, f1d: opt.f1d, f2n: opt.f2n, f2d: opt.f2d };
       const res = evaluateFrac001(vars);
 
       return {
         scenarioId: 'frac-transfer-001',
         context: 'pocketmoney',
-        prompt: `Arjun spends ${f1n}/${f1d} of his pocket money on books and ${f2n}/${f2d} on snacks. What fraction of his money does he have left?`,
+        prompt: `Arjun spends ${opt.f1n}/${opt.f1d} of his pocket money on books and ${opt.f2n}/${opt.f2d} on snacks. What fraction of his pocket money does he have left?`,
         variables: vars,
         hints: [
-          `Hint 1 — Observation 👀: Are the pieces or parts of the pocket money the same size? Identify the fractions spent.`,
-          `Hint 2 — Strategy 🧠: To add fractions with different sizes, we must first make the parts the same size.`,
-          `Hint 3 — Gentle Nudge 💡: Find a common denominator to rewrite both fractions before combining them.`
+          `First add the two fractions together to find the total fraction spent: ${opt.f1n}/${opt.f1d} + ${opt.f2n}/${opt.f2d}.`,
+          `Find a common denominator to add the fractions. For example, the common denominator for ${opt.f1d} and ${opt.f2d} is ${res.lcm}.`,
+          `Subtract the sum of the spent fractions from the whole pocket money (which is represented by 1).`
         ]
       };
     },
@@ -320,8 +319,8 @@ const fractionaddScenarios = [
     explanation: (vars) => {
       const res = evaluateFrac001(vars);
       return `Step 1: Find the fraction spent in total → ${vars.f1n}/${vars.f1d} + ${vars.f2n}/${vars.f2d}\n` +
-             `        = ${res.spentNum}/${res.lcm}\n` +
-             `Step 2: Subtract from the whole (1) → 1 - ${res.spentNum}/${res.lcm} = ${res.lcm}/${res.lcm} - ${res.spentNum}/${res.lcm} = ${res.answer}`;
+        `        = ${res.spentNum}/${res.lcm}\n` +
+        `Step 2: Subtract from the whole (1) → 1 - ${res.spentNum}/${res.lcm} = ${res.lcm}/${res.lcm} - ${res.spentNum}/${res.lcm} = ${res.answer}`;
     },
     transferMapping: "Fraction addition allows you to find a combined share of a whole. Subtracting a fraction from 1 represents finding the remaining fraction of a whole resource."
   },
@@ -339,19 +338,18 @@ const fractionaddScenarios = [
         { f1n: 1, f1d: 6, f2n: 1, f2d: 4 }  // sum 5/12
       ];
       const opt = options[Math.floor(Math.random() * options.length)];
-      const { f1n, f1d, f2n, f2d } = opt;
-      const vars = { f1n, f1d, f2n, f2d };
+      const vars = { f1n: opt.f1n, f1d: opt.f1d, f2n: opt.f2n, f2d: opt.f2d };
       const res = evaluateFrac002(vars);
 
       return {
         scenarioId: 'frac-transfer-002',
         context: 'cooking',
-        prompt: `Meena ate ${f1n}/${f1d} of a pizza, and Rahul ate ${f2n}/${f2d} of the same pizza. What fraction of the pizza did they eat altogether?`,
+        prompt: `Meena ate ${opt.f1n}/${opt.f1d} of a pizza, and Rahul ate ${opt.f2n}/${opt.f2d} of the same pizza. What fraction of the pizza was eaten in total?`,
         variables: vars,
         hints: [
-          `Hint 1 — Observation 👀: Are the pizza pieces the same size? Look at the bottom number of both fractions.`,
-          `Hint 2 — Strategy 🧠: If the pieces are different sizes, find a way to cut the pizza so the parts are equal.`,
-          `Hint 3 — Gentle Nudge 💡: Find the least common multiple of the two bottom numbers to make the pieces equal.`
+          `To find the total fraction of pizza eaten, add the two fractions: ${opt.f1n}/${opt.f1d} + ${opt.f2n}/${opt.f2d}.`,
+          `Find a common denominator (LCM of ${opt.f1d} and ${opt.f2d} is ${res.lcm}).`,
+          `Convert both fractions to have this common denominator, then add the numerators.`
         ]
       };
     },
@@ -359,8 +357,8 @@ const fractionaddScenarios = [
     explanation: (vars) => {
       const res = evaluateFrac002(vars);
       return `Step 1: Add Meena and Rahul's fractions → ${vars.f1n}/${vars.f1d} + ${vars.f2n}/${vars.f2d}\n` +
-             `Step 2: Find common denominator → LCM of ${vars.f1d} and ${vars.f2d} is ${res.lcm}\n` +
-             `Step 3: Convert and sum → ${res.v1n}/${res.lcm} + ${res.v2n}/${res.lcm} = ${res.answer}`;
+        `Step 2: Find common denominator → LCM of ${vars.f1d} and ${vars.f2d} is ${res.lcm}\n` +
+        `Step 3: Convert and sum → ${res.v1n}/${res.lcm} + ${res.v2n}/${res.lcm} = ${res.answer}`;
     },
     transferMapping: "Adding fractions finds the combined total when sharing a resource. Always convert the fractions to a common denominator before adding."
   }
@@ -442,12 +440,12 @@ const additionScenarios = [
       return {
         scenarioId: 'add-transfer-001',
         context: 'travel',
-        prompt: `A school bus starts with ${initial} children. At the first stop, ${off} children get off, and ${on} children get on. How many children are on the bus now?`,
+        prompt: `A passenger train leaves Chennai Central with ${initial} passengers. At the first station, ${off} passengers get off the train, and ${on} new passengers get on. How many passengers are on the train when it departs the station?`,
         variables: vars,
         hints: [
-          `Hint 1 — Observation 👀: Is the total number of children increasing or decreasing at each step?`,
-          `Hint 2 — Strategy 🧠: Think about which numbers should be subtracted and which should be added.`,
-          `Hint 3 — Gentle Nudge 💡: Calculate how many children were left on the bus after the first stop.`
+          `Find out how many passengers were left on the train when ${off} passengers got off first.`,
+          `Subtract ${off} from the initial count of ${initial} passengers (which is ${initial - off}).`,
+          `Now add the ${on} new passengers who got on the train.`
         ]
       };
     },
@@ -456,7 +454,7 @@ const additionScenarios = [
       const remaining = vars.initial - vars.off;
       const ans = remaining + vars.on;
       return `Step 1: Subtract passengers who got off → ${vars.initial} - ${vars.off} = ${remaining}\n` +
-             `Step 2: Add passengers who got on → ${remaining} + ${vars.on} = ${ans}`;
+        `Step 2: Add passengers who got on → ${remaining} + ${vars.on} = ${ans}`;
     },
     transferMapping: "Adding and subtracting whole numbers maps directly to real-world volume changes, such as passengers on a train."
   },
@@ -474,12 +472,12 @@ const additionScenarios = [
       return {
         scenarioId: 'add-transfer-002',
         context: 'shopping',
-        prompt: `Karan goes to a toy store with ₹${budget}. He buys a toy train for ₹${s1} and a book for ₹${s2}. Then, he returns a card and gets ₹${refund} back. How much money does he have now?`,
+        prompt: `Karan goes shopping with ₹${budget}. He buys a shirt for ₹${s1} and a belt for ₹${s2}. Later, he returns a small item and receives a cash refund of ₹${refund}. How much money does Karan have left now?`,
         variables: vars,
         hints: [
-          `Hint 1 — Observation 👀: What is the starting amount of money? Note which actions make the money go down and which make it go up.`,
-          `Hint 2 — Strategy 🧠: Find the total amount spent first, then subtract it and add the returned amount.`,
-          `Hint 3 — Gentle Nudge 💡: Combine the cost of the toy train and the book first.`
+          `Calculate the total amount spent on the shirt and the belt first.`,
+          `Subtract that total spent amount from his initial budget of ₹${budget}.`,
+          `Add the refund of ₹${refund} to find his final remaining balance.`
         ]
       };
     },
@@ -489,8 +487,8 @@ const additionScenarios = [
       const left = vars.budget - spent;
       const ans = left + vars.refund;
       return `Step 1: Find total amount spent → ₹${vars.s1} + ₹${vars.s2} = ₹${spent}\n` +
-             `Step 2: Subtract from budget → ₹${vars.budget} - ₹${spent} = ₹${left}\n` +
-             `Step 3: Add the refund → ₹${left} + ₹${vars.refund} = ₹${ans}`;
+        `Step 2: Subtract from budget → ₹${vars.budget} - ₹${spent} = ₹${left}\n` +
+        `Step 3: Add the refund → ₹${left} + ₹${vars.refund} = ₹${ans}`;
     },
     transferMapping: "A budget decreases by the sum of expenses and increases when a cash refund is returned."
   }
@@ -509,12 +507,12 @@ const decimalsScenarios = [
       return {
         scenarioId: 'dec-transfer-001',
         context: 'sports',
-        prompt: `During a race, the winner finishes in ${t1} seconds. The next runner finishes ${gap} seconds after the winner. How many seconds did the next runner take?`,
+        prompt: `During a school track meet, the winner of the 100-meter sprint clocks a time of ${t1} seconds. The runner-up crosses the finish line trailing the winner by ${gap} seconds. What is the runner-up's race completion time in seconds?`,
         variables: vars,
         hints: [
-          `Hint 1 — Observation 👀: Notice where the decimal point is. Does finishing after the winner mean taking more or less time?`,
-          `Hint 2 — Strategy 🧠: Digits in the same place value should line up. How do we add two decimal numbers?`,
-          `Hint 3 — Gentle Nudge 💡: Place the numbers vertically so the decimal points line up perfectly.`
+          `Hint 1 - Observation: Identify the winner's race duration. Does trailing the winner mean taking more or less time to finish?`,
+          `Hint 2 - Strategy: Add the trailing delay time to the winning time to find the runner-up's time. Make sure to align the decimal places.`,
+          `Hint 3 - Gentle Nudge: Think of the winning time as the starting point, and increase it by the decimal gap value.`
         ]
       };
     },
@@ -522,7 +520,7 @@ const decimalsScenarios = [
     explanation: (vars) => {
       const ans = Math.round((vars.t1 + vars.gap) * 100) / 100;
       return `Step 1: Set up the decimal sum → ${vars.t1} + ${vars.gap}\n` +
-             `Step 2: Align decimal places and add → ${ans} seconds`;
+        `Step 2: Align decimal places and add → ${ans} seconds`;
     },
     transferMapping: "Adding a trailing delay gap in time results in a larger decimal finish time value."
   },
@@ -539,12 +537,12 @@ const decimalsScenarios = [
       return {
         scenarioId: 'dec-transfer-002',
         context: 'cooking',
-        prompt: `A chef needs ${target} kg of flour for a cake. They put ${c1} kg of wheat flour and ${c2} kg of corn flour in a bowl. How much more flour do they need to add?`,
+        prompt: `A baker needs a total of ${target} kg of mixed flour for a recipe. They weigh out ${c1} kg of wheat flour and ${c2} kg of ragi flour into a bowl. How many more kg of flour must they add to reach the exact target weight?`,
         variables: vars,
         hints: [
-          `Hint 1 — Observation 👀: What is the target weight? Look at the decimal values of the flour already in the bowl.`,
-          `Hint 2 — Strategy 🧠: Digits in the same place value should line up. Find the total weight of the two flours in the bowl first.`,
-          `Hint 3 — Gentle Nudge 💡: Line up the decimal points of the weighed flours to add them.`
+          `Hint 1 - Observation: What is the total target weight of flour needed, and how much wheat and ragi flour have already been weighed?`,
+          `Hint 2 - Strategy: Find the combined weight of the flour already in the bowl, then find the difference between that total and the target.`,
+          `Hint 3 - Gentle Nudge: Combine the decimal values of the weighed flours first before calculating what remains.`
         ]
       };
     },
@@ -553,7 +551,7 @@ const decimalsScenarios = [
       const sum = Math.round((vars.c1 + vars.c2) * 100) / 100;
       const ans = Math.round((vars.target - sum) * 100) / 100;
       return `Step 1: Find total weighed flour → ${vars.c1} kg + ${vars.c2} kg = ${sum} kg\n` +
-             `Step 2: Subtract from target weight → ${vars.target} kg - ${sum} kg = ${ans} kg`;
+        `Step 2: Subtract from target weight → ${vars.target} kg - ${sum} kg = ${ans} kg`;
     },
     transferMapping: "Finding a remaining decimal fraction is solved by subtracting the sum of known decimal parts from the target whole."
   }
@@ -585,7 +583,7 @@ const hcflcmScenarios = [
     explanation: (vars) => {
       const ans = gcd(vars.a, vars.b);
       return `Step 1: Identify HCF is needed to share resources equally with maximum bags.\n` +
-             `Step 2: Find HCF of ${vars.a} and ${vars.b} → ${ans}`;
+        `Step 2: Find HCF of ${vars.a} and ${vars.b} → ${ans}`;
     },
     transferMapping: "The maximum identical packages that can be split without remainders is equivalent to the Greatest Common Divisor (GCD/HCF)."
   },
@@ -614,7 +612,7 @@ const hcflcmScenarios = [
     explanation: (vars) => {
       const ans = (vars.l1 * vars.l2) / gcd(vars.l1, vars.l2);
       return `Step 1: Identify that synchronization cycles match multiples.\n` +
-             `Step 2: Find the LCM of ${vars.l1} and ${vars.l2} → ${ans} seconds`;
+        `Step 2: Find the LCM of ${vars.l1} and ${vars.l2} → ${ans} seconds`;
     },
     transferMapping: "Recurring synchronized intervals are determined by evaluating the Least Common Multiple (LCM)."
   }
@@ -649,8 +647,8 @@ const lineareqScenarios = [
       const net = vars.total - vars.f;
       const ans = net / vars.c;
       return `Step 1: Set up shipping cost equation → ${vars.f} + ${vars.c}x = ${vars.total}\n` +
-             `Step 2: Subtract shipping cost → ${vars.c}x = ${net}\n` +
-             `Step 3: Solve for x → x = ${net} / ${vars.c} = ${ans} notebooks`;
+        `Step 2: Subtract shipping cost → ${vars.c}x = ${net}\n` +
+        `Step 3: Solve for x → x = ${net} / ${vars.c} = ${ans} notebooks`;
     },
     transferMapping: "Solving for variable item counts from mixed fixed/variable pricing maps directly to single-variable linear equations."
   },
@@ -682,8 +680,8 @@ const lineareqScenarios = [
       const net = vars.total - vars.base;
       const ans = net / vars.rate;
       return `Step 1: Set up taxi fare equation → ${vars.base} + ${vars.rate}d = ${vars.total}\n` +
-             `Step 2: Subtract base fare → ${vars.rate}d = ${net}\n` +
-             `Step 3: Solve for d → d = ${net} / ${vars.rate} = ${ans} km`;
+        `Step 2: Subtract base fare → ${vars.rate}d = ${net}\n` +
+        `Step 3: Solve for d → d = ${net} / ${vars.rate} = ${ans} km`;
     },
     transferMapping: "Variable distance fares with fixed hire elements require isolating variables in a linear relationship."
   }
@@ -718,8 +716,8 @@ const sdtScenarios = [
       const relSpeed = vars.s2 - vars.s1;
       const ans = Math.round((lead / relSpeed) * 100) / 100;
       return `Step 1: Calculate lead distance → ${vars.s1} km/h × ${vars.delay} hours = ${lead} km\n` +
-             `Step 2: Calculate relative speed difference → ${vars.s2} - ${vars.s1} = ${relSpeed} km/h\n` +
-             `Step 3: Calculate catch-up time → ${lead} km / ${relSpeed} km/h = ${ans} hours`;
+        `Step 2: Calculate relative speed difference → ${vars.s2} - ${vars.s1} = ${relSpeed} km/h\n` +
+        `Step 3: Calculate catch-up time → ${lead} km / ${relSpeed} km/h = ${ans} hours`;
     },
     transferMapping: "The time to close a spatial gap is equal to the initial lead distance divided by the relative speed difference of the objects."
   },
@@ -750,8 +748,8 @@ const sdtScenarios = [
       const den = vars.s1 + vars.s2;
       const ans = Math.round((num / den) * 100) / 100;
       return `Step 1: Set up the harmonic mean formula → 2 × S1 × S2 / (S1 + S2)\n` +
-             `Step 2: Multiply speeds → 2 × ${vars.s1} × ${vars.s2} = ${num}\n` +
-             `Step 3: Divide by sum of speeds → ${num} / (${vars.s1} + ${vars.s2}) = ${ans} km/h`;
+        `Step 2: Multiply speeds → 2 × ${vars.s1} × ${vars.s2} = ${num}\n` +
+        `Step 3: Divide by sum of speeds → ${num} / (${vars.s1} + ${vars.s2}) = ${ans} km/h`;
     },
     transferMapping: "The average speed over equal segments of a round trip is calculated using the harmonic mean, not the arithmetic mean."
   }
@@ -790,8 +788,8 @@ const probScenarios = [
       const favorable = vars.w + vars.d;
       const ans = simplifyFraction(favorable, total);
       return `Step 1: Find total matches → ${vars.w} + ${vars.d} + ${vars.l} = ${total}\n` +
-             `Step 2: Find matches not lost → ${vars.w} + ${vars.d} = ${favorable}\n` +
-             `Step 3: Write and simplify fraction → ${favorable}/${total} = ${ans}`;
+        `Step 2: Find matches not lost → ${vars.w} + ${vars.d} = ${favorable}\n` +
+        `Step 3: Write and simplify fraction → ${favorable}/${total} = ${ans}`;
     },
     transferMapping: "Probability of an event is the ratio of favorable outcomes to the total outcomes in the sample space."
   },
@@ -825,8 +823,8 @@ const probScenarios = [
       const total = vars.r + vars.b + vars.g;
       const ans = simplifyFraction(vars.r, total);
       return `Step 1: Find total marbles → ${vars.r} + ${vars.b} + ${vars.g} = ${total}\n` +
-             `Step 2: Favorable red outcomes → ${vars.r}\n` +
-             `Step 3: Write and simplify fraction → ${vars.r}/${total} = ${ans}`;
+        `Step 2: Favorable red outcomes → ${vars.r}\n` +
+        `Step 3: Write and simplify fraction → ${vars.r}/${total} = ${ans}`;
     },
     transferMapping: "Calculating target color ratios represents fractional probability of picking a single item from a colored set."
   }
@@ -861,8 +859,8 @@ const mensurScenarios = [
       const walls = 2 * vars.h * (vars.l + vars.w);
       const ans = base + walls;
       return `Step 1: Find base area → ${vars.l} × ${vars.w} = ${base} cm²\n` +
-             `Step 2: Find side wall areas → 2 × ${vars.h} × (${vars.l} + ${vars.w}) = ${walls} cm²\n` +
-             `Step 3: Combine areas → ${base} + ${walls} = ${ans} cm²`;
+        `Step 2: Find side wall areas → 2 × ${vars.h} × (${vars.l} + ${vars.w}) = ${walls} cm²\n` +
+        `Step 3: Combine areas → ${base} + ${walls} = ${ans} cm²`;
     },
     transferMapping: "The surface area of an open rectangular prism is evaluated by omitting the top face: base + 2 × height × (length + width)."
   },
@@ -891,8 +889,8 @@ const mensurScenarios = [
     explanation: (vars) => {
       const ans = Math.round((22 / 7) * vars.r * vars.r * vars.h);
       return `Step 1: Set up cylinder volume formula → V = πr²h\n` +
-             `Step 2: Substitute values → (22/7) × ${vars.r} × ${vars.r} × ${vars.h}\n` +
-             `Step 3: Compute volume → ${ans} cubic meters`;
+        `Step 2: Substitute values → (22/7) × ${vars.r} × ${vars.r} × ${vars.h}\n` +
+        `Step 3: Compute volume → ${ans} cubic meters`;
     },
     transferMapping: "Calculating liquid holding capacity of standard tankers maps directly to evaluating cylinder volumes."
   }
@@ -931,9 +929,9 @@ const quadraticScenarios = [
       const x = (-b + Math.sqrt(b * b - 4 * a * c)) / (2 * a);
       const rows = x + vars.diff;
       return `Step 1: Model layout as quadratic equation → x(x + ${vars.diff}) = ${vars.total}\n` +
-             `Step 2: Expand to standard form → x² + ${vars.diff}x - ${vars.total} = 0\n` +
-             `Step 3: Factor or solve roots → (x - ${x})(x + ${x + vars.diff}) = 0 → x = ${x} (columns)\n` +
-             `Step 4: Find rows → columns + ${vars.diff} = ${rows} rows`;
+        `Step 2: Expand to standard form → x² + ${vars.diff}x - ${vars.total} = 0\n` +
+        `Step 3: Factor or solve roots → (x - ${x})(x + ${x + vars.diff}) = 0 → x = ${x} (columns)\n` +
+        `Step 4: Find rows → columns + ${vars.diff} = ${rows} rows`;
     },
     transferMapping: "Grid-based surface constraints require forming and resolving quadratic formulas."
   },
@@ -961,8 +959,8 @@ const quadraticScenarios = [
     explanation: (vars) => {
       const ans = vars.v / 5;
       return `Step 1: Set height h to 0 → ${vars.v}t - 5t² = 0\n` +
-             `Step 2: Factor out the variable t → t(${vars.v} - 5t) = 0\n` +
-             `Step 3: Solve for non-zero time → 5t = ${vars.v} → t = ${ans} seconds`;
+        `Step 2: Factor out the variable t → t(${vars.v} - 5t) = 0\n` +
+        `Step 3: Solve for non-zero time → 5t = ${vars.v} → t = ${ans} seconds`;
     },
     transferMapping: "Evaluating projectile flight durations maps to solving the roots of a quadratic equation when the vertical coordinate equals zero."
   }
@@ -996,8 +994,8 @@ const matrixScenarios = [
     explanation: (vars) => {
       const rev = vars.pa * vars.ta + vars.pc * vars.tc;
       return `Step 1: Form Row and Column matrices → [${vars.pa}, ${vars.pc}] × [${vars.ta}, ${vars.tc}]ᵀ\n` +
-             `Step 2: Multiply corresponding entries → (${vars.pa} × ${vars.ta}) + (${vars.pc} × ${vars.tc})\n` +
-             `Step 3: Sum up to get total revenue → ₹${rev}`;
+        `Step 2: Multiply corresponding entries → (${vars.pa} × ${vars.ta}) + (${vars.pc} × ${vars.tc})\n` +
+        `Step 3: Sum up to get total revenue → ₹${rev}`;
     },
     transferMapping: "Multi-product business sales and costing operations are modeled mathematically as vector dot products or Row-by-Column matrix multiplications."
   },
@@ -1029,8 +1027,8 @@ const matrixScenarios = [
       const sum1 = vars.a1 + vars.b1;
       const sum2 = vars.a2 + vars.b2;
       return `Step 1: Set up matrix sum → [${vars.a1}, ${vars.a2}] + [${vars.b1}, ${vars.b2}]\n` +
-             `Step 2: Add matching indices → [${vars.a1} + ${vars.b1}, ${vars.a2} + ${vars.b2}]\n` +
-             `Step 3: Find combined matrix → [${sum1}, ${sum2}]`;
+        `Step 2: Add matching indices → [${vars.a1} + ${vars.b1}, ${vars.a2} + ${vars.b2}]\n` +
+        `Step 3: Find combined matrix → [${sum1}, ${sum2}]`;
     },
     transferMapping: "Aggregating inventory across multiple business divisions is modeled as standard matrix addition."
   }
@@ -1125,8 +1123,8 @@ const bankingScenarios = [
       const dep = vars.p * vars.n;
       const interest = vars.p * (vars.n * (vars.n + 1) / 2) * (1 / 12) * (vars.r / 100);
       return `Step 1: Total Principal deposited → ${vars.p} × ${vars.n} = ₹${dep}\n` +
-             `Step 2: Calculate Simple Interest → ₹${Math.round(interest)}\n` +
-             `Step 3: Maturity value → ₹${dep} + ₹${Math.round(interest)} = ₹${Math.round(dep + interest)}`;
+        `Step 2: Calculate Simple Interest → ₹${Math.round(interest)}\n` +
+        `Step 3: Maturity value → ₹${dep} + ₹${Math.round(interest)} = ₹${Math.round(dep + interest)}`;
     },
     transferMapping: "Recurring Deposit interest calculations map to summation series and simple interest formulas."
   }
@@ -1157,7 +1155,7 @@ const bearingsScenarios = [
     explanation: (vars) => {
       const ans = vars.b < 180 ? vars.b + 180 : vars.b - 180;
       return `Step 1: Identify if bearing ${vars.b}° is < or >= 180°\n` +
-             `Step 2: Calculate back bearing → ${vars.b}° ${vars.b < 180 ? '+' : '-'} 180° = ${String(ans).padStart(3, '0')}°`;
+        `Step 2: Calculate back bearing → ${vars.b}° ${vars.b < 180 ? '+' : '-'} 180° = ${String(ans).padStart(3, '0')}°`;
     },
     transferMapping: "Back bearings in navigation represent a 180-degree rotation of the bearing vector."
   }
@@ -1193,7 +1191,7 @@ const binomialScenarios = [
       const fact = (num) => num <= 1 ? 1 : num * fact(num - 1);
       const ans = fact(vars.n) / (fact(vars.k) * fact(vars.n - vars.k));
       return `Step 1: Combinations formula → C(n, k) = n! / (k! (n-k)!)\n` +
-             `Step 2: Solve C(${vars.n}, ${vars.k}) → ${vars.n}! / (${vars.k}! × ${vars.n - vars.k}!) = ${ans}`;
+        `Step 2: Solve C(${vars.n}, ${vars.k}) → ${vars.n}! / (${vars.k}! × ${vars.n - vars.k}!) = ${ans}`;
     },
     transferMapping: "Binomial coefficient expansions calculate counts of favorable permutations in multi-stage trials."
   }
@@ -1310,8 +1308,8 @@ const complexScenarios = [
       const real = vars.r1 + vars.r2;
       const imag = vars.x1 + vars.x2;
       return `Step 1: Add real parts → ${vars.r1} + ${vars.r2} = ${real}\n` +
-             `Step 2: Add imaginary parts → (${vars.x1} + ${vars.x2})i = ${imag}i\n` +
-             `Step 3: Combine → ${real} + ${imag}i`;
+        `Step 2: Add imaginary parts → (${vars.x1} + ${vars.x2})i = ${imag}i\n` +
+        `Step 3: Combine → ${real} + ${imag}i`;
     },
     transferMapping: "Complex addition combines independent real components (resistances) and imaginary components (reactances)."
   }
@@ -1370,8 +1368,8 @@ const conicsScenarios = [
       const x = vars.width / 2;
       const ans = (vars.width * vars.width) / 32;
       return `Step 1: Find boundary point → (x, y) = (${x}, 2)\n` +
-             `Step 2: Set up equation → 2 = ${x}² / (4f) → 8f = ${x * x}\n` +
-             `Step 3: Solve for f → f = ${x * x} / 8 = ${ans} meters`;
+        `Step 2: Set up equation → 2 = ${x}² / (4f) → 8f = ${x * x}\n` +
+        `Step 3: Solve for f → f = ${x * x} / 8 = ${ans} meters`;
     },
     transferMapping: "Parabolic surfaces focus radiation to points defined by the focal variable equation: y = x^2 / (4f)."
   }
@@ -1406,8 +1404,8 @@ const coordgeomScenarios = [
       const mx = (vars.x1 + vars.x2) / 2;
       const my = (vars.y1 + vars.y2) / 2;
       return `Step 1: Midpoint X → (${vars.x1} + ${vars.x2}) / 2 = ${mx}\n` +
-             `Step 2: Midpoint Y → (${vars.y1} + ${vars.y2}) / 2 = ${my}\n` +
-             `Step 3: Midpoint coordinates → ${mx}, ${my}`;
+        `Step 2: Midpoint Y → (${vars.y1} + ${vars.y2}) / 2 = ${my}\n` +
+        `Step 3: Midpoint coordinates → ${mx}, ${my}`;
     },
     transferMapping: "Finding the center of linear installations translates directly to coordinate midpoint formulas."
   }
@@ -1441,7 +1439,7 @@ const diffScenarios = [
       const derivCoeff = -2 * vars.a;
       const ans = derivCoeff * vars.x + vars.b;
       return `Step 1: Differentiate R(x) → R'(x) = ${derivCoeff}x + ${vars.b}\n` +
-             `Step 2: Substitute x = ${vars.x} → ${derivCoeff}(${vars.x}) + ${vars.b} = ${ans}`;
+        `Step 2: Substitute x = ${vars.x} → ${derivCoeff}(${vars.x}) + ${vars.b} = ${ans}`;
     },
     transferMapping: "Marginal revenue represents the derivative (rate of change) of a pricing function."
   }
@@ -1503,7 +1501,7 @@ const funcevalScenarios = [
       const term2 = vars.b * vars.y;
       const ans = term1 + term2 + 120;
       return `Step 1: Substitute variables → C(${vars.x}, ${vars.y}) = ${vars.a}(${vars.x}) + ${vars.b}(${vars.y}) + 120\n` +
-             `Step 2: Compute terms → ${term1} + ${term2} + 120 = ₹${ans}`;
+        `Step 2: Compute terms → ${term1} + ${term2} + 120 = ₹${ans}`;
     },
     transferMapping: "Evaluating factory costing functions involves substituting independent quantities into multi-variable functions."
   }
@@ -1535,7 +1533,7 @@ const gstScenarios = [
     explanation: (vars) => {
       const ans = Math.round((vars.price * (vars.rate / 100)) * 100) / 100;
       return `Step 1: Calculate GST fraction → ${vars.rate} / 100 = ${vars.rate / 100}\n` +
-             `Step 2: Multiply by base price → ₹${vars.price} × ${vars.rate / 100} = ₹${ans}`;
+        `Step 2: Multiply by base price → ₹${vars.price} × ${vars.rate / 100} = ₹${ans}`;
     },
     transferMapping: "GST calculations apply percentage rates to base transaction values."
   }
@@ -1568,7 +1566,7 @@ const indicesScenarios = [
       const factor = Math.pow(2, vars.hours);
       const ans = vars.initial * factor;
       return `Step 1: Compute exponential growth factor → 2^${vars.hours} = ${factor}\n` +
-             `Step 2: Multiply by initial count → ${vars.initial} × ${factor} = ${ans}`;
+        `Step 2: Multiply by initial count → ${vars.initial} × ${factor} = ${ans}`;
     },
     transferMapping: "Growth double steps correspond directly to base-2 exponential functions (2^t)."
   }
@@ -1677,7 +1675,7 @@ const profitlossScenarios = [
       const diff = vars.sp - vars.cp;
       const ans = Math.round((diff / vars.cp) * 100 * 100) / 100;
       return `Step 1: Find profit amount → ₹${vars.sp} - ₹${vars.cp} = ₹${diff}\n` +
-             `Step 2: Find profit percentage → (₹${diff} / ₹${vars.cp}) × 100 = ${ans}%`;
+        `Step 2: Find profit percentage → (₹${diff} / ₹${vars.cp}) × 100 = ${ans}%`;
     },
     transferMapping: "Profit percentages express absolute profits relative to the initial cost price."
   }
@@ -1710,8 +1708,8 @@ const pythagScenarios = [
       const sum = vars.base * vars.base + vars.height * vars.height;
       const ans = Math.round(Math.sqrt(sum) * 100) / 100;
       return `Step 1: Set up Pythagoras → D² = ${vars.base}² + ${vars.height}²\n` +
-             `Step 2: Add square values → D² = ${vars.base * vars.base} + ${vars.height * vars.height} = ${sum}\n` +
-             `Step 3: Solve square root → D = √${sum} = ${ans} km`;
+        `Step 2: Add square values → D² = ${vars.base * vars.base} + ${vars.height * vars.height} = ${sum}\n` +
+        `Step 3: Solve square root → D = √${sum} = ${ans} km`;
     },
     transferMapping: "Right-angle spatial displacement maps directly to Pythagoras' theorem hypotenuse formulas."
   }
@@ -1746,7 +1744,7 @@ const remfactorScenarios = [
       const k = vars.k;
       const ans = k * k * k - 4 * k * k + 5 * k - 2;
       return `Step 1: Remainder theorem → Remainder = P(${k})\n` +
-             `Step 2: Substitute and compute → (${k}³) - 4(${k}²) + 5(${k}) - 2 = ${ans}`;
+        `Step 2: Substitute and compute → (${k}³) - 4(${k}²) + 5(${k}) - 2 = ${ans}`;
     },
     transferMapping: "Remainder values of polynomial divisions are determined by evaluating functions at the divisor roots."
   }
@@ -1835,7 +1833,7 @@ const sequencesScenarios = [
     explanation: (vars) => {
       const term = vars.a + (vars.n - 1) * vars.d;
       return `Step 1: Identify AP variables → a = ₹${vars.a}, d = ₹${vars.d}, n = ${vars.n}\n` +
-             `Step 2: Apply term formula → ${vars.a} + (${vars.n} - 1) × ${vars.d} = ₹${term}`;
+        `Step 2: Apply term formula → ${vars.a} + (${vars.n} - 1) × ${vars.d} = ₹${term}`;
     },
     transferMapping: "Incremental periodic growth profiles represent arithmetic progressions (AP)."
   }
@@ -1869,7 +1867,7 @@ const sharesScenarios = [
       const totalFaceVal = vars.n * vars.nv;
       const ans = totalFaceVal * (vars.divRate / 100);
       return `Step 1: Total Face Value → ${vars.n} shares × ₹${vars.nv} = ₹${totalFaceVal}\n` +
-             `Step 2: Calculate dividend → ₹${totalFaceVal} × ${vars.divRate}% = ₹${ans}`;
+        `Step 2: Calculate dividend → ₹${totalFaceVal} × ${vars.divRate}% = ₹${ans}`;
     },
     transferMapping: "Corporate dividends represent percentage returns computed exclusively on nominal face values."
   }
@@ -1904,7 +1902,7 @@ const setsScenarios = [
       const union = vars.c + vars.f - vars.both;
       const ans = vars.total - union;
       return `Step 1: Find union of sports players → ${vars.c} + ${vars.f} - ${vars.both} = ${union}\n` +
-             `Step 2: Subtract union from total → ${vars.total} - ${union} = ${ans}`;
+        `Step 2: Subtract union from total → ${vars.total} - ${union} = ${ans}`;
     },
     transferMapping: "Overlap counts in grouping surveys utilize set intersection and union algebra."
   }
@@ -1937,7 +1935,7 @@ const similarityScenarios = [
       const scaleVol = Math.pow(vars.ratio, 3);
       const ans = vars.v1 * scaleVol;
       return `Step 1: Calculate volume scale factor → ${vars.ratio}³ = ${scaleVol}\n` +
-             `Step 2: Scale prototype volume → ${vars.v1} cm³ × ${scaleVol} = ${ans} cm³`;
+        `Step 2: Scale prototype volume → ${vars.v1} cm³ × ${scaleVol} = ${ans} cm³`;
     },
     transferMapping: "Volume changes in similar physical models scale proportionally to the cube of their linear dimensions."
   }
