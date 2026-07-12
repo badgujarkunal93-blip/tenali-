@@ -49975,6 +49975,7 @@ function LearningJourneyCheckpointQuizView({ topicId, onBack }) {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const celebrationRef = useRef(null);
 
   const loadQuiz = async () => {
     try {
@@ -49995,6 +49996,47 @@ function LearningJourneyCheckpointQuizView({ topicId, onBack }) {
   useEffect(() => {
     loadQuiz();
   }, [topicId]);
+
+  useEffect(() => {
+    if (!result || !result.passed || !celebrationRef.current) return;
+    const canvas = celebrationRef.current;
+    const ctx = canvas.getContext('2d');
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    const colors = ['#ff6b6b', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#5f27cd', '#01a3a4', '#f368e0', '#ff9f43', '#00d2d3'];
+    const confetti = Array.from({ length: 150 }, () => ({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height - canvas.height,
+      w: Math.random() * 12 + 6,
+      h: Math.random() * 8 + 4,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      vx: (Math.random() - 0.5) * 4,
+      vy: Math.random() * 3 + 2,
+      rot: Math.random() * 360,
+      rotSpeed: (Math.random() - 0.5) * 10
+    }));
+    let frame;
+    const animate = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      let allDone = true;
+      confetti.forEach(c => {
+        c.x += c.vx;
+        c.y += c.vy;
+        c.rot += c.rotSpeed;
+        c.vy += 0.05;
+        if (c.y < canvas.height + 50) allDone = false;
+        ctx.save();
+        ctx.translate(c.x, c.y);
+        ctx.rotate((c.rot * Math.PI) / 180);
+        ctx.fillStyle = c.color;
+        ctx.fillRect(-c.w / 2, -c.h / 2, c.w, c.h);
+        ctx.restore();
+      });
+      if (!allDone) frame = requestAnimationFrame(animate);
+    };
+    animate();
+    return () => { if (frame) cancelAnimationFrame(frame); };
+  }, [result]);
 
   const handleSelectAnswer = (ansVal) => {
     const qId = quiz.questions[currentIdx].id;
@@ -50026,6 +50068,20 @@ function LearningJourneyCheckpointQuizView({ topicId, onBack }) {
   if (result) {
     return (
       <div style={{ padding: '16px' }}>
+        {result.passed && (
+          <canvas
+            ref={celebrationRef}
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              width: '100vw',
+              height: '100vh',
+              pointerEvents: 'none',
+              zIndex: 9999
+            }}
+          />
+        )}
         <div style={{ textAlign: 'center', marginBottom: '24px' }}>
           <h2 style={{ color: result.passed ? 'var(--clr-correct, #26de81)' : 'red' }}>
             {result.passed ? '🎉 Checkpoint Passed!' : '❌ Try Again'}
