@@ -35632,20 +35632,6 @@ function App() {
     )
   }
 
-  // Route: /laquiz → Linear Algebra Quiz (Adaptive quiz with timer & explanations)
-  if (pathname === '/laquiz') {
-    return (
-      <>
-        <button className="theme-toggle" onClick={toggleTheme} title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}>
-          {theme === 'dark' ? '☀️' : '🌙'}
-        </button>
-        <div className="app-shell"><div className="card">
-          <LinearAlgebraQuizApp onBack={() => { window.location.href = '/' }} />
-        </div></div>
-      </>
-    )
-  }
-
   // Route: /chapter1 → Cambridge IGCSE Chapter 1 (Reviewing Number Concepts)
   if (pathname === '/chapter1') {
     return (
@@ -36673,7 +36659,6 @@ function App() {
   // Map quiz mode keys to their component classes
   const modeMap = {
     linearalgebra: LinearAlgebraApp, // Linear Algebra Module 1
-    laquiz: LinearAlgebraQuizApp, // Linear Algebra Quiz
     missionquiz: MissionQuizApp, // Mission-specific Linear Algebra Quiz
     gk: GKApp,                    // General Knowledge
     addition: AdditionApp,         // Basic addition
@@ -36826,7 +36811,6 @@ function Home({ onSelect }) {
     { key: 'invtrig', name: 'Inverse Trig', subtitle: 'arcsin, arccos, arctan', color: 'green' },
     { key: 'limits', name: 'Limits', subtitle: 'Evaluate limits', color: 'purple' },
     { key: 'linearalgebra', name: 'Linear Algebra', subtitle: '56 missions across 6 modules', color: 'orange' },
-    { key: 'laquiz', name: 'Linear Algebra Quiz', subtitle: 'Vectors, matrices, systems & more', color: 'blue' },
     { key: 'lineareq', name: 'Linear Equations', subtitle: 'Solve for x in one variable', color: 'blue' },
     { key: 'lineq', name: 'Line Equation', subtitle: 'Find m and c from two points', color: 'green' },
     { key: 'linprog', name: 'Linear Programming', subtitle: 'Optimize objective functions', color: 'green' },
@@ -46903,7 +46887,6 @@ function fetchQuestionForType(type, difficulty, qIndex = 0) {
     conics: `${API}/conics-api/question?difficulty=${difficulty}`,
     diffeq: `${API}/diffeq-api/question?difficulty=${difficulty}`,
     tatsavit: `${API}/tatsavit-api/question?difficulty=${difficulty}`,
-    laquiz: `${API}/linearalgebra-api/question?difficulty=${difficulty}`,
   }
   return fetch(urls[type]).then(r => r.json())
 }
