@@ -5431,4 +5431,208 @@ body.modal-open-scroll-lock {
   justify-content: center;
   z-index: 5;
   border: 1px solid rgba(255, 255, 255, 0.08);
-}
+}.dartboard-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 20px 0;
+  user-select: none;
+}
+
+.dartboard-grid {
+  position: relative;
+  width: 300px;
+  height: 300px;
+  background: var(--clr-surface);
+  border: 2px solid var(--clr-border);
+  background-image: 
+    linear-gradient(var(--clr-border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--clr-border) 1px, transparent 1px);
+  background-size: 30px 30px;
+  background-position: -1px -1px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 10px rgba(0,0,0,0.2);
+  cursor: crosshair;
+}
+
+/* The X and Y main axes (thicker lines) */
+.dartboard-axis-x {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--clr-accent);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.dartboard-axis-y {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--clr-accent);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+/* Axis Labels */
+.dartboard-label {
+  position: absolute;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--clr-text-soft);
+  pointer-events: none;
+}
+.dartboard-label.origin { top: calc(50% + 4px); left: calc(50% + 4px); }
+.dartboard-label.x-pos { top: calc(50% + 4px); right: 4px; }
+.dartboard-label.y-pos { top: 4px; left: calc(50% + 4px); }
+.dartboard-label.x-neg { top: calc(50% + 4px); left: 4px; }
+.dartboard-label.y-neg { bottom: 4px; left: calc(50% + 4px); }
+
+/* The dart marker */
+.dart-marker {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  font-size: 20px;
+  line-height: 24px;
+  text-align: center;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  filter: drop-shadow(0 4px 6px rgba(0,0,0,0.5));
+  z-index: 10;
+  transition: top 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275), left 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.dartboard-controls {
+  margin-top: 20px;
+  display: flex;
+  gap: 12px;
+}
+
+/* ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+   Visual Math Lab
+   ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ */
+
+@keyframes frogBounce {
+  0%   { transform: translateX(-50%) translateY(0);   }
+  40%  { transform: translateX(-50%) translateY(-18px); }
+  70%  { transform: translateX(-50%) translateY(-6px);  }
+  100% { transform: translateX(-50%) translateY(0);   }
+}
+
+@keyframes cellPop {
+  0%   { transform: scale(1);    }
+  40%  { transform: scale(1.25); }
+  100% { transform: scale(1);    }
+}
+
+.vm-cell-filled {
+  animation: cellPop 0.2s ease;
+}
+
+.vm-bucket-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  font-weight: 700;
+  cursor: pointer;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.1s;
+}
+.vm-bucket-btn:active { transform: scale(0.9); }
+
+.scale-container {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow: visible;
+}
+
+
+/* New Lab UI Classes */
+.setup-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 15px 0;
+  padding: 10px;
+  background: var(--clr-card);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--clr-border);
+}
+
+.setup-row label {
+  font-weight: 600;
+  color: var(--clr-text);
+}
+
+.setup-row select {
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--clr-border);
+  background: var(--clr-bg);
+  color: var(--clr-text);
+  font-family: inherit;
+  font-size: 1rem;
+}
+
+.confetti-anim {
+  font-size: 4rem;
+  animation: bounce 1s infinite alternate;
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+@keyframes bounce {
+  from { transform: translateY(0); }
+  to { transform: translateY(-20px); }
+}
+
+/* Guide Button (Dynamic Tour) */
+.guide-toggle {
+  position: fixed;
+  top: 16px;
+  left: 16px;           /* anchored to LEFT ΓÇö can never overlap the right-side theme toggle */
+  right: auto;
+  background: linear-gradient(135deg, #e8864a, #d4703a);
+  color: #fff;
+  border: none;
+  border-radius: 20px;
+  padding: 8px 16px;
+  cursor: pointer;
+  z-index: 1000;
+  font-weight: 700;
+  font-family: var(--font-body, 'DM Sans', sans-serif);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  box-shadow: 0 4px 14px rgba(232,134,74,0.35);
+  transition: all 0.2s;
+  font-size: 0.88rem;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.guide-toggle:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(232,134,74,0.45);
+  background: linear-gradient(135deg, #f09050, #e8864a);
+}
+@media (max-width: 700px) {
+  .guide-toggle {
+    top: 16px;
+    left: 12px;
+    right: auto;
+    font-size: 0.82rem;
+    padding: 6px 12px;
+  }
+}
+

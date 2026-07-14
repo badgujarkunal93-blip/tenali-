@@ -4,3 +4,6 @@ client/dist
 server.log
 docs/
 server/in_memory_users_db.json
+server/dictionaryCache
+ISSUE_DRAFT.md
+PR_DRAFT.md
