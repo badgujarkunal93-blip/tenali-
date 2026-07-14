@@ -21,11 +21,13 @@
  * Progress persistence: Adaptive tables app saves current table progress in localStorage
  */
 
-import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react'; window.React = React; console.log("React version:", React.version);
-
-import VoiceAssistant from './components/VoiceAssistant'
+import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
+import VoiceAssistant from './components/VoiceAssistant';
 import { motion } from 'framer-motion';
-import OnboardingTour from './components/OnboardingTour'
+import OnboardingTour from './components/OnboardingTour';
+
+window.React = React;
+console.log("React version:", React.version);
 
 
 /**
@@ -39832,6 +39834,8 @@ function App() {
   const [mode, setMode] = useState(null)
   // Tracks if the active practice session should show the Goal Selector UI
   const [isGoalMode, setIsGoalMode] = useState(false)
+  const [journeyContext, setJourneyContext] = useState(null)
+  const [activeTopicId, setActiveTopicId] = useState('arithmetic_basics')
   const [progressData, setProgressData] = useState(null)
   const [showTour, setShowTour] = useState(() => localStorage.getItem('tenali_tour_seen') !== 'true')
 
@@ -40489,54 +40493,120 @@ function App() {
   // Get the component to render (or null if mode not set)
   const ActiveApp = mode && mode !== 'goalpractice' ? modeMap[mode] : null
 
+  const renderContent = () => {
+    if (mode === 'learning_journey') {
+      return (
+        <AuthGate>
+          <LearningJourneyHome
+            onSelectTopic={(topicId) => {
+              setActiveTopicId(topicId);
+              setMode('learning_journey_topic');
+            }}
+            onBack={() => setMode(null)}
+          />
+        </AuthGate>
+      );
+    }
+
+    if (mode === 'learning_journey_topic') {
+      return (
+        <AuthGate>
+          <LearningJourneyTopicView
+            topicId={activeTopicId}
+            onPlayConcept={(conceptKey) => {
+              setJourneyContext({ topicId: activeTopicId, conceptKey });
+              setMode(conceptKey);
+            }}
+            onStartCheckpoint={() => {
+              setMode('learning_journey_checkpoint');
+            }}
+            onBack={() => setMode('learning_journey')}
+          />
+        </AuthGate>
+      );
+    }
+
+    if (mode === 'learning_journey_checkpoint') {
+      return (
+        <AuthGate>
+          <LearningJourneyCheckpointQuizView
+            topicId={activeTopicId}
+            onBack={() => setMode('learning_journey_topic')}
+          />
+        </AuthGate>
+      );
+    }
+
+    if (mode === 'goalpractice') {
+      return (
+        <Home
+          isGoalSelection={true}
+          onBack={() => {
+            setMode(null);
+            setIsGoalMode(false);
+          }}
+          onSelect={(key) => {
+            setMode(key);
+            setIsGoalMode(true);
+          }}
+        />
+      );
+    }
+
+    if (ActiveApp) {
+      const element = (
+        <ActiveApp
+          onBack={journeyContext ? async () => {
+            const isCompleted = !!document.querySelector('.final-score');
+            if (isCompleted) {
+              try {
+                await journeyFetch('/api/learning-journey/complete-concept', {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    topicId: journeyContext.topicId,
+                    conceptKey: journeyContext.conceptKey
+                  })
+                });
+              } catch (e) {
+                console.error('Failed to save concept progress:', e);
+              }
+            }
+            setJourneyContext(null);
+            setMode('learning_journey_topic');
+          } : () => {
+            if (isGoalMode) {
+              setMode('goalpractice');
+            } else {
+              setMode(null);
+            }
+          }}
+          isGoalMode={isGoalMode}
+        />
+      );
+      return journeyContext ? <AuthGate>{element}</AuthGate> : element;
+    }
+
+    return (
+      <Home
+        onSelect={(key) => {
+          if (key === 'goalpractice') {
+            setMode('goalpractice');
+          } else {
+            setMode(key);
+            setIsGoalMode(false);
+          }
+        }}
+      />
+    );
+  };
+
   return (
     <div className="app-shell">
       <button className="theme-toggle" onClick={toggleTheme} title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}>
         {theme === 'dark' ? '☀️' : '🌙'}
       </button>
       <div className="card">
-        {!mode ? (
-          <Home onSelect={(key) => {
-            if (key === 'goalpractice') {
-              setMode('goalpractice');
-            } else {
-              setMode(key);
-              setIsGoalMode(false);
-            }
-          }} />
-        ) : mode === 'goalpractice' ? (
-          <Home
-            isGoalSelection={true}
-            onBack={() => {
-              setMode(null);
-              setIsGoalMode(false);
-            }}
-            onSelect={(key) => {
-              setMode(key);
-              setIsGoalMode(true);
-            }}
-          />
-        ) : ActiveApp ? (
-          <ActiveApp
-            onBack={() => {
-              if (isGoalMode) {
-                setMode('goalpractice');
-              } else {
-                setMode(null);
-              }
-            }}
-            isGoalMode={isGoalMode}
-          />
-        ) : (
-          <Home onSelect={(key) => {
-            if (key === 'goalpractice') {
-              setMode('goalpractice');
-            } else {
-              setMode(key);
-              setIsGoalMode(false);
-            }
-          }} />
-        )}
+        {renderContent()}
       </div>
     </div>
   )
@@ -40794,6 +40864,22 @@ function Home({ onSelect, isGoalSelection = false, onBack }) {
             </button>
           </div>
         </>
+      )}
+      {!search && !isGoalSelection && (
+        <div className="journey-banner-row">
+          <button className="journey-banner-btn" onClick={() => onSelect('learning_journey')}>
+            <div className="journey-banner-content">
+              <div className="journey-banner-header">
+                <span>⭐</span>
+                <h3 className="journey-banner-title">Guided Learning Journey</h3>
+              </div>
+              <p className="journey-banner-subtitle">
+                Embark on a structured, sequential math learning path with checkpoints.
+              </p>
+            </div>
+            <div className="journey-banner-arrow">➔</div>
+          </button>
+        </div>
       )}
       <div className="search-bar-row">
         <input
@@ -46630,7 +46716,7 @@ function makeMCQuizApp({ title, subtitle, apiPath, diffLabels, tip, adaptiveOnly
 }
 
 function makeQuizApp({ title, subtitle, apiPath, diffLabels, placeholders, tip, answerField }) {
-  return function GeneratedQuizApp({ onBack, initialDifficulty, initialNumQuestions, initialStarted }) {
+  return function GeneratedQuizApp({ onBack, initialDifficulty, initialNumQuestions, initialStarted, isGoalMode = false }) {
     const diffs = Object.keys(diffLabels)
     const [difficulty, setDifficulty] = useState(initialDifficulty || diffs[0])
     const [isAdaptive, setIsAdaptive] = useState(false)
@@ -47014,7 +47100,7 @@ function MatrixBox({ matrix, label }) {
   )
 }
 
-function DotProdApp({ onBack }) {
+function DotProdApp({ onBack, isGoalMode = false }) {
   const DIFFS = ['easy', 'medium', 'hard', 'extrahard']
   const DIFF_LABELS_DP = { easy: 'Easy — 2D Dot', medium: 'Medium — 2D / 3D', hard: 'Hard — Matrix ×', extrahard: 'Extra Hard — Fill Blanks' }
 
@@ -57581,7 +57667,7 @@ const TATSAVIT1_QUESTIONS = [
  * One MCQ at a time: Submit checks the answer, Explanation reveals a stepped
  * timeline via renderFeedback, Next advances. Finishes with a results summary.
  */
-function Tatsavit1App({ onBack }) {
+function Tatsavit1App({ onBack, isGoalMode = false }) {
   const [idx, setIdx] = useState(0)
   const [selected, setSelected] = useState(null)
   const [revealed, setRevealed] = useState(false)
@@ -58227,7 +58313,7 @@ const RIYA_UNITS = [
  * Pass threshold: 4 of 5 correct. Passing advances to the next unit;
  * failing replays the lesson with a "let's review" banner.
  */
-function RiyaApp({ onBack }) {
+function RiyaApp({ onBack, isGoalMode = false }) {
   const [unitIdx, setUnitIdx] = useState(0)
   const [phase, setPhase] = useState('lesson')           // 'lesson' | 'quiz' | 'complete'
   const [quizIdx, setQuizIdx] = useState(0)
