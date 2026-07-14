@@ -41254,11 +41254,11 @@ function Home({ onSelect, isGoalSelection = false, onBack }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [search, setSearch] = useState('')
 
-  // Special featured apps (shown in first row — Visual Learning Universe removed to hamburger menu only)
+  // Special featured apps (shown in hamburger menu)
   const featuredApps = [
-    { key: 'addition', name: 'Addition', subtitle: '20-question addition practice', color: 'blue' },
-    { key: 'mensuration-lab', name: 'Mensuration', subtitle: 'Geometry & Shape Puzzles', color: 'green' },
-    { key: 'coordgeom', name: 'Coordinate Geometry', subtitle: 'Discovery Sandbox Mode', color: 'blue' },
+    { key: 'randommix', name: 'Random Mix', subtitle: 'Adaptive cross-topic quiz', color: 'featured' },
+    { key: 'custom', name: 'Custom Lesson', subtitle: 'Build your own mixed quiz', color: 'featured' },
+    { key: 'gym', name: 'Gym', subtitle: 'Adaptive workout across all 7 gym puzzles', color: 'featured' },
   ]
   // Visual Learning Universe lives only in the hamburger menu
   const mathLabEntry = { key: 'math-lab', name: '🔬 Visual Learning Universe', subtitle: 'Visual, Mensuration & Addition labs', color: 'orange' }
@@ -41266,9 +41266,6 @@ function Home({ onSelect, isGoalSelection = false, onBack }) {
   // All regular quiz apps sorted alphabetically by name
   const regularApps = [
     { key: 'comic-addition', name: 'Comic Addition', subtitle: 'Story Mode', color: 'purple' },
-    { key: 'custom', name: 'Custom Lesson', subtitle: 'Build your own mixed quiz', color: 'blue' },
-    { key: 'gym', name: 'Gym', subtitle: 'Adaptive workout across all 7 gym puzzles', color: 'green' },
-    { key: 'randommix', name: 'Random Mix', subtitle: 'Adaptive cross-topic quiz', color: 'purple' },
     { key: 'angles', name: 'Angles', subtitle: 'Lines, points, parallel lines', color: 'green' },
     { key: 'banking', name: 'Banking (RD)', subtitle: 'Interest & recurring deposits', color: 'blue' },
     { key: 'bearings', name: 'Bearings', subtitle: 'Three-figure bearings', color: 'green' },
@@ -41380,7 +41377,7 @@ function Home({ onSelect, isGoalSelection = false, onBack }) {
   const filteredRegular = isSearching ? regularApps.filter(matchFilter) : regularApps
   
   // Decide which items to show on the main grid list
-  const displayGridApps = isGoalSelection ? filteredRegular : [...filteredFeatured, ...filteredRegular]
+  const displayGridApps = isGoalSelection ? filteredRegular : [...filteredRegular]
 
   // Grid layout tracking (for responsive display)
   const gridRef = useRef(null)
@@ -41465,6 +41462,29 @@ function Home({ onSelect, isGoalSelection = false, onBack }) {
             ))}
             <div style={{ height: '1px', background: 'var(--clr-border)', margin: '4px 0' }} />
 
+            <button onClick={() => { setMenuOpen(false); onSelect('goalpractice') }} style={{
+              display: 'block', width: '100%', textAlign: 'left', padding: '10px 16px',
+              background: 'none', border: 'none', cursor: 'pointer', color: 'var(--clr-text)',
+              fontFamily: 'var(--font-body)', fontSize: '0.95rem', transition: 'background var(--transition)'
+            }} onMouseEnter={e => e.target.style.background = 'var(--clr-hover-strong)'}
+               onMouseLeave={e => e.target.style.background = 'none'}>
+              <strong style={{ color: 'var(--clr-accent)' }}>🎯 Goal Practice</strong>
+              <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--clr-text-soft)', marginTop: '2px' }}>Practice with targets & limits</span>
+            </button>
+
+            {featuredApps.map(app => (
+              <button key={app.key} onClick={() => { setMenuOpen(false); onSelect(app.key) }} style={{
+                display: 'block', width: '100%', textAlign: 'left', padding: '10px 16px',
+                background: 'none', border: 'none', cursor: 'pointer', color: 'var(--clr-text)',
+                fontFamily: 'var(--font-body)', fontSize: '0.95rem', transition: 'background var(--transition)'
+              }} onMouseEnter={e => e.target.style.background = 'var(--clr-hover-strong)'}
+                 onMouseLeave={e => e.target.style.background = 'none'}>
+                <strong style={{ color: 'var(--clr-accent)' }}>{app.name}</strong>
+                <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--clr-text-soft)', marginTop: '2px' }}>{app.subtitle}</span>
+              </button>
+            ))}
+
+            <div style={{ height: '1px', background: 'var(--clr-border)', margin: '4px 0' }} />
 
             <button onClick={() => { setMenuOpen(false); window.location.href = '/language'; }} style={{
               display: 'block', width: '100%', textAlign: 'left', padding: '10px 16px',
