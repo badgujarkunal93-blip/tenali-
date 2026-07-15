@@ -59993,16 +59993,6 @@ export function QuizLayout({ title, subtitle, onBack, children, timer, sessionGo
       {processedChildren}
     </>
   )
-}>← Home</button>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {goalBadge}
-          {timerDisplay}
-        </div>
-      </div>
-      <h1 style={{ fontSize: 'clamp(1.8rem, 3.8vw, 2.4rem)' }}>{title}</h1>
-      {children}
-    </>
-  )
 }
 
 
