@@ -634,7 +634,7 @@ function Level1ExplanationView({ onBack, onContinueToQuiz, initialStep, clearIni
 
   // ── Worked example reveal ──
   const [exampleStep, setExampleStep] = useState(1);
-  const totalExampleSteps             = 4;
+  const totalExampleSteps             = 5;
 
   // ── Story completion gate (section 4 → 5) ──
   const [storyFinished, setStoryFinished] = useState(false);
@@ -796,7 +796,7 @@ function Level1ExplanationView({ onBack, onContinueToQuiz, initialStep, clearIni
         </div>
 
         <div style={{ textAlign: 'center', marginTop: '15px', fontWeight: '800', color: 'var(--clr-dim)' }}>
-          {`Section ${activeSection} of 5 · ${['Interactive Visual Model', 'Concept Theory', 'Step-by-Step Worked Example', 'Percent Story', 'Quick Check Quiz'][activeSection - 1]}`}
+          {`Section ${activeSection} of 5`}
         </div>
       </div>
 
@@ -882,55 +882,77 @@ function Level1ExplanationView({ onBack, onContinueToQuiz, initialStep, clearIni
         {/* ── SECTION B: CONCEPT THEORY ── */}
         {activeSection === 2 && (
           <div className="explanation-card theory-card">
-            <h2 className="section-title">2. Concept Theory</h2>
+            {/* Section title + progress indicator */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+              <h2 className="section-title" style={{ margin: 0, border: 'none', paddingBottom: 0 }}>2. Concept Theory</h2>
+              <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--clr-text-soft)', border: '1px solid var(--clr-border)', borderRadius: '999px', padding: '3px 10px', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                {theoryStep} of {totalTheorySteps}
+              </span>
+            </div>
+            <div style={{ borderBottom: '1px solid var(--clr-border)', marginBottom: '20px' }} />
 
-            <div className="theory-steps-list">
-              {theoryStep >= 1 && (
+            {/* One card at a time — key triggers fade-in on every swap */}
+            <div key={`theory-${theoryStep}`} className="theory-steps-list" style={{ marginBottom: 0 }}>
+              {theoryStep === 1 && (
                 <div className="step-item fade-in">
                   <div className="step-num">1</div>
                   <div className="step-content">
-                    <strong>What is a percentage?</strong> A percentage means "how many out of 100."
+                    <strong>Use the formula!</strong><br />This is the shortcut for finding a part of a whole:
+                    <div className="formula-block">Part = (Percent ÷ 100) × Whole</div>
                   </div>
                 </div>
               )}
-              {theoryStep >= 2 && (
+              {theoryStep === 2 && (
                 <div className="step-item fade-in">
                   <div className="step-num">2</div>
                   <div className="step-content">
-                    <strong>Think of 100 pieces:</strong> Imagine cutting the whole into 100 equal slices.
+                    <strong>What is a percentage?</strong><br />A percentage tells you "how many out of 100" — which is the idea behind the formula.
                   </div>
                 </div>
               )}
-              {theoryStep >= 3 && (
+              {theoryStep === 3 && (
                 <div className="step-item fade-in">
                   <div className="step-num">3</div>
                   <div className="step-content">
-                    <strong>Turn the percent into a decimal:</strong> Divide it by 100 — so {percent}% becomes {(percent / 100).toFixed(2)}.
+                    <strong>Think of 100 pieces:</strong><br />Imagine cutting the whole into 100 equal slices, so the percent tells you how many slices to take.
                   </div>
                 </div>
               )}
-              {theoryStep >= 4 && (
+              {theoryStep === 4 && (
                 <div className="step-item fade-in">
                   <div className="step-num">4</div>
                   <div className="step-content">
-                    <strong>Use the formula!</strong> Multiply the decimal by the whole to get the part:
-                    <div className="formula-block">Part = (Percent ÷ 100) × Whole</div>
+                    <strong>Turn the percent into a decimal:</strong><br />Divide it by 100 — so {percent}% becomes {(percent / 100).toFixed(2)}. Then multiply by the whole.
                   </div>
                 </div>
               )}
             </div>
 
+            {/* Outer nav row: outer-Back always visible; inner-Back hidden on card 1; inner-Next or outer-Next at final card */}
             <div className="explanation-nav-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '30px', gap: '15px' }}>
-              <button className="percentages-btn percentages-btn-secondary" onClick={() => setActiveSection(1)}>
-                ⬅️ Back
-              </button>
+              {/* Left side: outer Back to Section 1, or inner Back within section */}
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <button className="percentages-btn percentages-btn-secondary" onClick={() => setActiveSection(1)}>
+                  ⬅️ Back
+                </button>
+                {theoryStep > 1 && (
+                  <button
+                    className="next-reveal-btn"
+                    style={{ margin: 0 }}
+                    onClick={() => setTheoryStep(prev => prev - 1)}
+                  >
+                    ← Prev
+                  </button>
+                )}
+              </div>
+              {/* Right side: inner Next, or completion badge + outer Next at final card */}
               {theoryStep < totalTheorySteps ? (
                 <button
                   className="next-reveal-btn"
                   style={{ margin: 0 }}
                   onClick={() => setTheoryStep(prev => prev + 1)}
                 >
-                  Next Idea
+                  Next →
                 </button>
               ) : (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
@@ -947,65 +969,86 @@ function Level1ExplanationView({ onBack, onContinueToQuiz, initialStep, clearIni
         {/* ── SECTION C: WORKED EXAMPLE ── */}
         {activeSection === 3 && (
           <div className="explanation-card example-card">
-            <h2 className="section-title">3. Step-by-Step Worked Example</h2>
+            {/* Section title + progress indicator */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+              <h2 className="section-title" style={{ margin: 0, border: 'none', paddingBottom: 0 }}>3. Step-by-Step Worked Example</h2>
+              <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--clr-text-soft)', border: '1px solid var(--clr-border)', borderRadius: '999px', padding: '3px 10px', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                {exampleStep} of {totalExampleSteps}
+              </span>
+            </div>
+            <div style={{ borderBottom: '1px solid var(--clr-border)', marginBottom: '8px' }} />
             <p className="section-subtitle">Problem: Find 15% of 80.</p>
 
-            <div className="example-steps-list">
-              {exampleStep >= 1 && (
+            {/* One card at a time — key triggers fade-in on every swap */}
+            <div key={`example-${exampleStep}`} className="example-steps-list" style={{ marginBottom: 0 }}>
+              {exampleStep === 1 && (
                 <div className="step-item fade-in">
                   <div className="step-indicator">Step 1</div>
                   <div className="step-content">
-                    Write the percent as a fraction over 100:
+                    Write the percent as a fraction over 100:<br />
                     <div className="math-equation">15% = 15 / 100</div>
                   </div>
                 </div>
               )}
-              {exampleStep >= 2 && (
+              {exampleStep === 2 && (
                 <div className="step-item fade-in">
                   <div className="step-indicator">Step 2</div>
                   <div className="step-content">
-                    Multiply the fraction by the whole amount:
+                    Multiply the fraction by the whole amount:<br />
                     <div className="math-equation">(15 / 100) × 80</div>
                   </div>
                 </div>
               )}
-              {exampleStep >= 3 && (
+              {exampleStep === 3 && (
                 <div className="step-item fade-in">
                   <div className="step-indicator">Step 3</div>
                   <div className="step-content">
-                    Change the fraction to a decimal:
+                    Change the fraction to a decimal:<br />
                     <div className="math-equation">0.15 × 80</div>
                   </div>
                 </div>
               )}
-              {exampleStep >= 4 && (
+              {exampleStep === 4 && (
                 <div className="step-item fade-in">
                   <div className="step-indicator">Step 4</div>
                   <div className="step-content">
-                    Multiply to get the answer:
+                    Multiply to get the answer:<br />
                     <div className="math-equation">0.15 × 80 = 12</div>
                   </div>
                 </div>
               )}
+              {exampleStep === 5 && (
+                <div className="example-conclusion-box fade-in">
+                  So, <strong>15% of 80 is 12</strong>! <span className="pop-emoji">🎉</span>
+                </div>
+              )}
             </div>
 
-            {exampleStep >= 4 && (
-              <div className="example-conclusion-box fade-in">
-                So, <strong>15% of 80 is 12</strong>! <span className="pop-emoji">🎉</span>
-              </div>
-            )}
-
+            {/* Outer nav row: outer-Back always visible; inner-Back hidden on card 1; inner-Next or outer-Next at final card */}
             <div className="explanation-nav-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '30px', gap: '15px' }}>
-              <button className="percentages-btn percentages-btn-secondary" onClick={() => setActiveSection(2)}>
-                ⬅️ Back
-              </button>
+              {/* Left side: outer Back to Section 2, or inner Back within section */}
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <button className="percentages-btn percentages-btn-secondary" onClick={() => setActiveSection(2)}>
+                  ⬅️ Back
+                </button>
+                {exampleStep > 1 && (
+                  <button
+                    className="next-reveal-btn"
+                    style={{ margin: 0 }}
+                    onClick={() => setExampleStep(prev => prev - 1)}
+                  >
+                    ← Prev
+                  </button>
+                )}
+              </div>
+              {/* Right side: inner Next, or completion badge + outer Next at final card */}
               {exampleStep < totalExampleSteps ? (
                 <button
                   className="next-reveal-btn"
                   style={{ margin: 0 }}
                   onClick={() => setExampleStep(prev => prev + 1)}
                 >
-                  Next Step
+                  Next →
                 </button>
               ) : (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>

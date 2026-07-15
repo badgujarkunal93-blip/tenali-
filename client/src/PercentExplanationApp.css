@@ -563,10 +563,10 @@
   border: 1px solid var(--clr-border);
   border-left: 5px solid var(--clr-accent);
   border-radius: 16px;
-  padding: 20px;
+  padding: 24px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
   margin-bottom: 18px;
-  gap: 20px;
+  gap: 22px;
 }
 
 .step-num {
@@ -595,7 +595,7 @@
 }
 
 .step-content {
-  font-size: 1.15rem;
+  font-size: 1.3rem;
   line-height: 1.5;
   color: var(--clr-text);
 }
