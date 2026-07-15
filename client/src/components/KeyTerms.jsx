@@ -1,8 +1,8 @@
 /**
- * KeyTerms.jsx — "Word Explorer" split-panel mini dictionary for the topic
+ * KeyTerms.jsx - "Word Explorer" split-panel mini dictionary for the topic
  * setup page.
  *
- * Renders a small toggle button "Word Explorer (N) ▾" that, when clicked,
+ * Renders a small toggle button "Word Explorer (N)" that, when clicked,
  * expands a 2-column anchored panel below it:
  *   - LEFT:  vertical list of the curated glossary terms for the topic
  *            (each row is a navigation button).
@@ -12,30 +12,32 @@
  *              3. Visual           (small inline SVG)
  *              4. Real-life Example
  *              5. Remember         (memory tip)
+ *              6. Differs from     (when defined)
  *
- * Only ONE glossary system exists: `KeyTerms` reads from the same
+ * Only ONE glossary system exists: KeyTerms reads from the same
  * `glossaryTerms.json` and `topicGlossaryMap.json` that the in-question
  * `<GlossaryText>` reads from. Definitions are never duplicated.
  *
  * Behaviour:
- *   - Click "Word Explorer" button  -> panel toggles open/closed
- *   - Panel opens -> first curated term auto-selected; right pane populated
- *   - Click a word on the left        -> right pane updates; panel stays open
- *   - Click the already-selected word -> no-op (stays selected)
- *   - Click outside the panel        -> panel closes
- *   - Press Escape                   -> panel closes
- *   - Window resize (mobile <-> desktop) -> CSS Grid handles layout swap
+ *   - Click "Word Explorer" button   panel toggles open/closed
+ *   - Panel opens                    first curated term auto-selected
+ *   - Click a word on the left       right pane updates; panel stays open
+ *   - Click the already-selected word no-op (stays selected)
+ *   - Click outside the panel        panel closes
+ *   - Press Escape                   panel closes
+ *   - Window resize (mobile <-> desktop)  CSS Grid handles layout swap
  *
  * Edge cases:
  *   - Topic has no curated terms, or all terms are missing from the
- *     glossary, or the data files are malformed -> entire component returns
- *     `null` (no button rendered). Quizzes still work.
- *   - Selected term somehow has no simpleMeaning -> falls back to
- *     `definition` so the right pane is never empty (defensive fallback).
- *   - Missing visualId / realLifeExample / memoryTip -> those sections
- *     are simply not rendered (clean gap, no placeholder).
+ *     glossary, or the data files are malformed  the whole component
+ *     returns `null` (no button rendered). Quizzes still work.
+ *   - Selected term somehow has no simpleMeaning  falls back to
+ *     `definition` so the right pane is never empty.
+ *   - Missing visualId / realLifeExample / memoryTip / differentiates
+ *     those sections are simply not rendered (clean gap, no placeholder).
  *
- * Internal component name and CSS classes are unchanged.
+ * Internal component name and CSS classes are unchanged from earlier
+ * versions of this feature.
  */
 
 import { useState, useEffect, useRef } from 'react'
@@ -161,7 +163,7 @@ export default function KeyTerms({ topicKey }) {
         aria-controls={panelId}
       >
         Word Explorer ({validEntries.length})
-        <span className="word-explorer-caret" aria-hidden="true">▾</span>
+        <span className="word-explorer-caret" aria-hidden="true">&#9662;</span>
       </button>
       {isOpen && (
         <div
@@ -204,21 +206,21 @@ export default function KeyTerms({ topicKey }) {
 
             {selectedEntry.realLifeExample ? (
               <div className="word-explorer-reader-example">
-                <span className="word-explorer-reader-icon" aria-hidden="true">🌍</span>
+                <span className="word-explorer-reader-icon" aria-hidden="true">Eg.</span>
                 <span className="word-explorer-reader-body">{selectedEntry.realLifeExample}</span>
               </div>
             ) : null}
 
             {selectedEntry.memoryTip ? (
               <div className="word-explorer-reader-tip">
-                <span className="word-explorer-reader-icon" aria-hidden="true">💡</span>
+                <span className="word-explorer-reader-icon" aria-hidden="true">Tip.</span>
                 <span className="word-explorer-reader-body">{selectedEntry.memoryTip}</span>
               </div>
             ) : null}
 
             {selectedEntry.differentiates && Object.keys(selectedEntry.differentiates).length > 0 ? (
               <div className="word-explorer-reader-difference">
-                <div className="word-explorer-reader-section-label">≠ Differs from</div>
+                <div className="word-explorer-reader-section-label">Differs from</div>
                 {Object.entries(selectedEntry.differentiates).map(([otherTerm, explanation]) => (
                   <div key={otherTerm} className="word-explorer-diff-row">
                     <span className="word-explorer-diff-term">{otherTerm}</span>
