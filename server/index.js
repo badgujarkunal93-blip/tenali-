@@ -656,7 +656,7 @@ function computeMulData(multiplicand, multiplier) {
     const pp = multiplicand * bDigit;
     const ppStr = String(pp);
     const ppLen = ppStr.length;
-    const carries = new Array(ppLen).fill(0);
+    const carries = new Array(ppLen).fill(null);
     let carry = 0;
     for (let i = ppLen - 1; i >= 0; i--) {
       const ai = aLen - 1 - (ppLen - 1 - i);
