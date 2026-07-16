@@ -50363,6 +50363,19 @@ function GymApp({ onBack }) {
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState('')
   const timer = useTimer()
+  const sessionGoal = 'standard'
+  const isAdaptive = true
+  const handleTimeout = async () => {
+    if (revealed) return
+    setIsCorrect(false); setRevealed(true)
+    setFeedback('⏰ Time\'s up!')
+    setResults(prev => [...prev, {
+      question: `[${currentGym?.name || ''} · ${currentDifficulty}] ${question?.prompt || ''}`,
+      userAnswer: '—', correctAnswer: '', correct: false, time: 0,
+    }])
+    lastCorrectRef.current = false
+    consecCorrectRef.current = 0
+  }
   const advanceFnRef = useRef(null)
   const submittedRef = useRef(false)
   const advancedRef = useRef(false)
@@ -50431,7 +50444,7 @@ function GymApp({ onBack }) {
       setSelectedOption(''); setCorrectOption('')
       setFeedback(''); setIsCorrect(null); setRevealed(false)
       submittedRef.current = false; advancedRef.current = false
-      timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(difficulty ?? 'easy', isAdaptive ?? false))
+      timer.start(sessionGoal, handleTimeout, getSpeedRunLimit(currentDifficulty ?? 'easy', isAdaptive ?? false))
     } catch (e) {
       console.error('Failed to load Gym question:', e)
       setQuestion(null)
