@@ -42659,13 +42659,6 @@ function App() {
         <div className="card">
           <AuthGate>
             <div style={{ position: 'relative' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '16px', marginBottom: '4px' }}>
-                <img src="/tenali.png" alt="Tenali Raman" style={{ width: '80px', height: 'auto', flexShrink: 0, cursor: 'pointer' }} onClick={() => window.location.href = '/'} />
-                <div>
-                  <h1 style={{ margin: 0, cursor: 'pointer' }} onClick={() => window.location.href = '/'}>Tenali</h1>
-                  <p className="subtitle" style={{ margin: 0 }}>View your achievements and milestones</p>
-                </div>
-              </div>
               <ProfileShowcase completedTopics={completedTopics} onSelectTopic={(topicKey) => { window.location.href = `/?mode=${topicKey}` }} />
             </div>
           </AuthGate>
