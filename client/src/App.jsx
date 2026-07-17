@@ -58,6 +58,7 @@ function useProgressSubmit(revealed, isCorrect, topic, questionId) {
 }
 import Vachana from './vachana'
 import './App.css'
+import EnhancedMathDetectiveApp from './detective-app'
 import GlossaryText from './components/GlossaryText'
 import KeyTerms from './components/KeyTerms'
 import InteractiveLcmHcfApp from './LcmHcfApp';
@@ -43976,6 +43977,7 @@ function App() {
     custom: CustomApp,             // Custom lesson builder
     gym: GymApp,                   // Unified adaptive Gym — bundles all 7 below
     guess: GuessNumberApp,         // Binary magic — guess a number 0–31
+    detective: EnhancedMathDetectiveApp, // Math Detective Agency — story-based mystery cases
     gymdecimals: GymDecimalsApp,   // Gym Decimals — signed decimal multiplication (MCQ)
     funcgym: FuncGymApp,           // Functions Gym — polynomial evaluation (MCQ)
     dotprodgym: DotProdGymApp,     // DotProducts Gym — 2D/3D dot products (MCQ)
@@ -44159,6 +44161,7 @@ function Home({ onSelect, completedTopics = [], goldMastery = [], coins = 0, isG
 
   // All regular quiz apps sorted alphabetically by name
   const regularApps = [
+    { key: 'detective', name: '🔍 Detective Agency', subtitle: 'Solve math mysteries and crack cases!', color: 'indigo' },
     { key: 'comic-addition', name: 'Comic Addition', subtitle: 'Story Mode', color: 'purple' },
     { key: 'addition', name: 'Addition', subtitle: '20-question addition practice', color: 'blue' },
     { key: 'column-addition', name: 'Column Addition', subtitle: 'Vertical addition with carrying', color: 'blue' },
