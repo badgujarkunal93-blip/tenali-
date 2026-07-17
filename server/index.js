@@ -1824,10 +1824,10 @@ app.get('/polymul-api/question', (req, res) => {
  * }
  */
 app.post('/polymul-api/check', (req, res) => {
-  const { p1, p2, userCoeffs } = req.body || {};
+  const { p1, p2, userCoeffs = [] } = req.body || {};
   const product = multiplyPolys(p1, p2);
   // Check both length and values to ensure correct answer
-  const correct = product.length === userCoeffs.length && product.every((c, i) => Number(userCoeffs[i]) === c);
+  const correct = Array.isArray(userCoeffs) && product.length === userCoeffs.length && product.every((c, i) => Number(userCoeffs[i]) === c);
   res.json({ correct, correctCoeffs: product, correctDisplay: formatPoly(product), message: correct ? 'Correct' : 'Incorrect' });
 });
 
@@ -9143,7 +9143,11 @@ const {
   getTopicProgression,
   completeConcept,
   getCheckpointQuiz,
-  verifyCheckpointQuiz
+  verifyCheckpointQuiz,
+  getPlacementTestQuiz,
+  verifyPlacementTest,
+  savePlacementTestProgress,
+  resetPlacementTest
 } = require('./lil/learning_journey/controllers');
 
 app.get('/api/learning-journey/progress', auth.requireAuth, async (req, res) => {
@@ -9167,7 +9171,8 @@ app.get('/api/learning-journey/progress', auth.requireAuth, async (req, res) => 
       topics: topicsProgress,
       completedConcepts: progress.completedConcepts,
       completedTopics: progress.completedTopics,
-      overallProgressPercent
+      overallProgressPercent,
+      hasActivePlacementTest: !!(progress.activePlacementTest && progress.activePlacementTest.questions && progress.activePlacementTest.questions.length > 0)
     });
   } catch (err) {
     console.error('[learning-journey] GET /progress error:', err.message);
@@ -9219,6 +9224,59 @@ app.post('/api/learning-journey/checkpoint/verify', auth.requireAuth, async (req
     res.json(result);
   } catch (err) {
     console.error('[learning-journey] POST /checkpoint/verify error:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/learning-journey/placement-test', auth.requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const quiz = await getPlacementTestQuiz(userId);
+    res.json(quiz);
+  } catch (err) {
+    console.error('[learning-journey] GET /placement-test error:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/learning-journey/placement-test/verify', auth.requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { answers } = req.body || {};
+    if (!answers) {
+      return res.status(400).json({ error: 'Missing answers' });
+    }
+
+    const result = await verifyPlacementTest(userId, answers);
+    res.json(result);
+  } catch (err) {
+    console.error('[learning-journey] POST /placement-test/verify error:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/learning-journey/placement-test/save-progress', auth.requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { answers, lastQuestionIndex } = req.body || {};
+    if (!answers) {
+      return res.status(400).json({ error: 'Missing answers' });
+    }
+    const result = await savePlacementTestProgress(userId, answers, lastQuestionIndex);
+    res.json(result);
+  } catch (err) {
+    console.error('[learning-journey] POST /placement-test/save-progress error:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/learning-journey/placement-test/reset', auth.requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const result = await resetPlacementTest(userId);
+    res.json(result);
+  } catch (err) {
+    console.error('[learning-journey] POST /placement-test/reset error:', err.message);
     res.status(400).json({ error: err.message });
   }
 });

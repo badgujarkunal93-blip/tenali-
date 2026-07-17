@@ -24,6 +24,7 @@ function createInMemoryProgressObject(userId, existing = {}) {
       keys: () => Object.keys(latestCheckpointScoreObj)
     },
     activeCheckpoint: existing.activeCheckpoint || null,
+    activePlacementTest: existing.activePlacementTest || null,
     save: async function() {
       inMemoryJourneyProgress[userId] = this;
       saveInMemoryJourney();
@@ -419,10 +420,249 @@ async function verifyCheckpointQuiz(userId, topicId, answers) {
   };
 }
 
+const PLACEMENT_PASS_THRESHOLD = 75;
+
+// Generate Combined Placement Test Quiz (10 topics x 10 questions = 100 questions)
+// If there is already an active session, resume it instead of generating a new one.
+async function getPlacementTestQuiz(userId) {
+  const progress = await getUserProgress(userId);
+
+  // Resume existing session if one exists
+  if (progress.activePlacementTest && progress.activePlacementTest.questions && progress.activePlacementTest.questions.length > 0) {
+    const existing = progress.activePlacementTest;
+    // Recover savedAnswers — handle both Map and plain object
+    let savedAnswers = {};
+    if (existing.savedAnswers) {
+      if (typeof existing.savedAnswers.entries === 'function') {
+        for (const [k, v] of existing.savedAnswers.entries()) {
+          savedAnswers[k] = v;
+        }
+      } else if (typeof existing.savedAnswers === 'object') {
+        savedAnswers = { ...existing.savedAnswers };
+      }
+    }
+    return {
+      resumed: true,
+      savedAnswers,
+      lastQuestionIndex: existing.lastQuestionIndex || 0,
+      questions: existing.questions.map(q => ({
+        id: q.id,
+        prompt: q.prompt,
+        conceptKey: q.conceptKey,
+        topicId: q.topicId
+      }))
+    };
+  }
+
+  // Generate a fresh test
+  const questions = [];
+  let questionCounter = 1;
+
+  for (const topic of JOURNEY_CURRICULUM) {
+    const concepts = topic.concepts;
+    // Draw 10 questions randomly from the concepts of this topic
+    for (let i = 0; i < 10; i++) {
+      const randomConcept = concepts[Math.floor(Math.random() * concepts.length)];
+      const q = await getQuestionForConcept(randomConcept.key);
+      questions.push({
+        id: `q-${questionCounter++}`,
+        prompt: q.prompt,
+        correctAnswer: q.answer,
+        conceptKey: randomConcept.key,
+        topicId: topic.id
+      });
+    }
+  }
+
+  // Save active placement test session to progress
+  progress.activePlacementTest = {
+    topicId: 'combined',
+    questions,
+    savedAnswers: {},
+    lastQuestionIndex: 0,
+    startedAt: new Date()
+  };
+  await progress.save();
+
+  // Return questions with correct answers stripped out for security
+  return {
+    resumed: false,
+    savedAnswers: {},
+    lastQuestionIndex: 0,
+    questions: questions.map(q => ({
+      id: q.id,
+      prompt: q.prompt,
+      conceptKey: q.conceptKey,
+      topicId: q.topicId
+    }))
+  };
+}
+
+// Verify Combined Placement Test answers
+async function verifyPlacementTest(userId, answers) {
+  const progress = await getUserProgress(userId);
+
+  if (!progress.activePlacementTest) {
+    throw new Error("No active placement test session found");
+  }
+
+  const activeQuestions = progress.activePlacementTest.questions;
+
+  // Grade all answers and group by topicId
+  const gradingResults = [];
+  const topicStats = {}; // topicId -> { correctCount: 0, totalCount: 0, questions: [] }
+
+  // Initialize stats for all curriculum topics
+  for (const topic of JOURNEY_CURRICULUM) {
+    topicStats[topic.id] = {
+      correctCount: 0,
+      totalCount: 0,
+      questions: []
+    };
+  }
+
+  for (const q of activeQuestions) {
+    const userAnswer = String(answers[q.id] || "").trim();
+    const isCorrect = userAnswer.toLowerCase() === q.correctAnswer.toLowerCase();
+    
+    const gradedQ = {
+      id: q.id,
+      prompt: q.prompt,
+      userAnswer,
+      correctAnswer: q.correctAnswer,
+      isCorrect,
+      topicId: q.topicId,
+      conceptKey: q.conceptKey
+    };
+    
+    gradingResults.push(gradedQ);
+
+    if (topicStats[q.topicId]) {
+      topicStats[q.topicId].totalCount++;
+      if (isCorrect) {
+        topicStats[q.topicId].correctCount++;
+      }
+      topicStats[q.topicId].questions.push(gradedQ);
+    }
+  }
+
+  // Calculate scores per topic and apply sequential skip logic
+  const topicSummary = [];
+  let chainBroken = false;
+  const completedTopicsBefore = new Set(progress.completedTopics);
+
+  for (const topic of JOURNEY_CURRICULUM) {
+    const stats = topicStats[topic.id] || { correctCount: 0, totalCount: 10 };
+    const scorePercent = stats.totalCount > 0 
+      ? Math.round((stats.correctCount / stats.totalCount) * 100 * 10) / 10 
+      : 0;
+    const passed = scorePercent >= PLACEMENT_PASS_THRESHOLD;
+
+    const alreadyCompleted = completedTopicsBefore.has(topic.id);
+    let skippedByTest = false;
+
+    if (alreadyCompleted) {
+      // Prior completion: continue the chain without breaking it
+    } else {
+      if (!chainBroken) {
+        if (passed) {
+          skippedByTest = true;
+          // Mark all concepts in this topic as completed
+          for (const concept of topic.concepts) {
+            if (!progress.completedConcepts.includes(concept.key)) {
+              progress.completedConcepts.push(concept.key);
+            }
+          }
+          // Push topicId into completedTopics
+          if (!progress.completedTopics.includes(topic.id)) {
+            progress.completedTopics.push(topic.id);
+          }
+          // Set latest score
+          progress.latestCheckpointScore.set(topic.id, scorePercent);
+          // Clear concepts of this topic from conceptsNeedingRevision (if any)
+          if (progress.conceptsNeedingRevision) {
+            const topicConceptKeys = topic.concepts.map(c => c.key);
+            progress.conceptsNeedingRevision = progress.conceptsNeedingRevision.filter(
+              cKey => !topicConceptKeys.includes(cKey)
+            );
+          }
+        } else {
+          // Fails threshold: break the chain
+          chainBroken = true;
+        }
+      }
+    }
+
+    topicSummary.push({
+      topicId: topic.id,
+      scorePercent,
+      correctCount: stats.correctCount,
+      totalQuestions: stats.totalCount,
+      passed,
+      alreadyCompleted,
+      skippedByTest
+    });
+
+    // Save attempt record for each topic on the test
+    progress.checkpointAttempts.push({
+      topicId: topic.id,
+      scorePercent,
+      passed,
+      attemptedAt: new Date(),
+      type: 'placement'
+    });
+  }
+
+  // Reset active placement test session
+  progress.activePlacementTest = null;
+  progress.updatedAt = new Date();
+  await progress.save();
+
+  return {
+    results: gradingResults,
+    topicSummary
+  };
+}
+
+// Save partial placement test progress (answers + position)
+async function savePlacementTestProgress(userId, answers, lastQuestionIndex) {
+  const progress = await getUserProgress(userId);
+  if (!progress.activePlacementTest) {
+    throw new Error('No active placement test session to save');
+  }
+  // Update saved answers
+  if (typeof progress.activePlacementTest.savedAnswers === 'object' && typeof progress.activePlacementTest.savedAnswers.set === 'function') {
+    // Mongoose Map
+    for (const [k, v] of Object.entries(answers)) {
+      progress.activePlacementTest.savedAnswers.set(k, String(v));
+    }
+  } else {
+    progress.activePlacementTest.savedAnswers = answers;
+  }
+  progress.activePlacementTest.lastQuestionIndex = lastQuestionIndex || 0;
+  progress.updatedAt = new Date();
+  await progress.save();
+  return { saved: true };
+}
+
+// Reset (discard) an active placement test so the user can start fresh
+async function resetPlacementTest(userId) {
+  const progress = await getUserProgress(userId);
+  progress.activePlacementTest = null;
+  progress.updatedAt = new Date();
+  await progress.save();
+  return { reset: true };
+}
+
 module.exports = {
   getUserProgress,
   getTopicProgression,
   completeConcept,
   getCheckpointQuiz,
-  verifyCheckpointQuiz
+  verifyCheckpointQuiz,
+  PLACEMENT_PASS_THRESHOLD,
+  getPlacementTestQuiz,
+  verifyPlacementTest,
+  savePlacementTestProgress,
+  resetPlacementTest
 };

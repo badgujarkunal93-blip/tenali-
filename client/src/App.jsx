@@ -42285,6 +42285,7 @@ function App() {
   const [activeTopicId, setActiveTopicId] = useState('arithmetic_basics')
   const [progressData, setProgressData] = useState(null)
   const [showTour, setShowTour] = useState(() => localStorage.getItem('tenali_tour_seen') !== 'true')
+  const [placementSessionResults, setPlacementSessionResults] = useState({})
 
   // Sync progress with backend on mount & whenever user changes
   useEffect(() => {
@@ -44012,7 +44013,36 @@ function App() {
               setActiveTopicId(topicId);
               setMode('learning_journey_topic');
             }}
+            onStartPlacement={() => {
+              setPlacementSessionResults({});
+              setMode('placement_test_quiz');
+            }}
             onBack={() => setMode(null)}
+          />
+        </AuthGate>
+      );
+    }
+
+    if (mode === 'placement_test_quiz') {
+      return (
+        <AuthGate>
+          <PlacementTestFlow
+            onBack={() => setMode('learning_journey')}
+            onFinish={(results) => {
+              setPlacementSessionResults(results);
+              setMode('placement_test_results');
+            }}
+          />
+        </AuthGate>
+      );
+    }
+
+    if (mode === 'placement_test_results') {
+      return (
+        <AuthGate>
+          <PlacementTestResultsView
+            sessionResults={placementSessionResults}
+            onBack={() => setMode('learning_journey')}
           />
         </AuthGate>
       );
@@ -66555,7 +66585,7 @@ const journeyFetch = async (path, options = {}) => {
   return res.json();
 };
 
-function LearningJourneyHome({ onSelectTopic, onBack }) {
+function LearningJourneyHome({ onSelectTopic, onStartPlacement, onBack }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -66599,14 +66629,57 @@ function LearningJourneyHome({ onSelectTopic, onBack }) {
         <p style={{ margin: '8px 0 0 0', fontSize: '0.85rem', color: 'var(--clr-text-soft)' }}>
           Completed {data.completedConcepts.length} concepts across {data.completedTopics.length} topics.
         </p>
+        {data.hasActivePlacementTest ? (
+          <div style={{ marginTop: '12px' }}>
+            <button
+              onClick={() => {
+                onStartPlacement();
+              }}
+              style={{
+                background: 'linear-gradient(135deg, #ff7e5f, #feb47b)',
+                border: 'none',
+                color: '#000',
+                padding: '8px 16px',
+                cursor: 'pointer',
+                fontSize: '0.9rem',
+                fontWeight: 'bold',
+                borderRadius: '8px',
+                display: 'inline-block'
+              }}
+            >
+              📝 Resume Personalized Journey Setup →
+            </button>
+          </div>
+        ) : data.completedTopics.length === 0 && data.completedConcepts.length === 0 ? (
+          <div style={{ marginTop: '12px' }}>
+            <button
+              onClick={() => {
+                onStartPlacement();
+              }}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--clr-accent, orange)',
+                padding: 0,
+                cursor: 'pointer',
+                fontSize: '0.9rem',
+                textDecoration: 'underline',
+                textAlign: 'left',
+                display: 'inline-block'
+              }}
+            >
+              Not sure where to start? Set up your personalized learning journey →
+            </button>
+          </div>
+        ) : null}
       </div>
-
+ 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px' }}>
         {data.topics.map((t, idx) => {
           if (!t) return null;
           const completedCount = t.concepts.filter(c => c.state === 'completed').length;
           const totalConcepts = t.concepts.length;
-
+ 
           return (
             <div
               key={t.topicId}
@@ -66652,15 +66725,19 @@ function LearningJourneyHome({ onSelectTopic, onBack }) {
                 <span>Concepts</span>
                 <span>{completedCount} / {totalConcepts}</span>
               </div>
-
+ 
               {t.unlocked && (
                 <div style={{ marginTop: '16px', fontSize: '0.85rem' }}>
                   {t.completed ? (
                     <span style={{ color: 'var(--clr-correct, #26de81)', fontWeight: 'bold' }}>Checkpoint Cleared ({t.latestScore}%)</span>
-                  ) : t.checkpointEligible ? (
-                    <span style={{ color: 'orange', fontWeight: 'bold' }}>Checkpoint Ready</span>
                   ) : (
-                    <span style={{ color: 'var(--clr-text-soft)' }}>Progressing ({Math.round((completedCount/totalConcepts)*100)}%)</span>
+                    <>
+                      {t.checkpointEligible ? (
+                        <span style={{ color: 'orange', fontWeight: 'bold' }}>Checkpoint Ready</span>
+                      ) : (
+                        <span style={{ color: 'var(--clr-text-soft)' }}>Progressing ({Math.round((completedCount/totalConcepts)*100)}%)</span>
+                      )}
+                    </>
                   )}
                 </div>
               )}
@@ -67156,6 +67233,334 @@ function LearningJourneyCheckpointQuizView({ topicId, onBack }) {
             {submitting ? 'Submitting...' : 'Finish Checkpoint'}
           </button>
         )}
+      </div>
+    </div>
+  );
+}
+
+function PlacementTestFlow({ onBack, onFinish }) {
+  const [quiz, setQuiz] = useState(null);
+  const [currentIdx, setCurrentIdx] = useState(0);
+  const [answers, setAnswers] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [resumed, setResumed] = useState(false);
+  const saveTimerRef = useRef(null);
+
+  const loadQuiz = async () => {
+    try {
+      setLoading(true);
+      const res = await journeyFetch('/api/learning-journey/placement-test');
+      setQuiz(res);
+      setError('');
+      // Restore saved state if resuming
+      if (res.resumed && res.savedAnswers) {
+        setAnswers(res.savedAnswers);
+        setCurrentIdx(res.lastQuestionIndex || 0);
+        setResumed(true);
+      } else {
+        setAnswers({});
+        setCurrentIdx(0);
+        setResumed(false);
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to load personalized learning journey setup');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadQuiz();
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, []);
+
+  // Debounced auto-save: saves 1.5s after the last answer change
+  const scheduleSave = useCallback((currentAnswers, idx) => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      journeyFetch('/api/learning-journey/placement-test/save-progress', {
+        method: 'POST',
+        body: JSON.stringify({ answers: currentAnswers, lastQuestionIndex: idx })
+      }).catch(() => {}); // silent background save
+    }, 1500);
+  }, []);
+
+  const handleSelectAnswer = (ansVal) => {
+    const qId = quiz.questions[currentIdx].id;
+    const newAnswers = { ...answers, [qId]: ansVal };
+    setAnswers(newAnswers);
+    scheduleSave(newAnswers, currentIdx);
+  };
+
+  const handleSaveAndQuit = async () => {
+    try {
+      setSaving(true);
+      await journeyFetch('/api/learning-journey/placement-test/save-progress', {
+        method: 'POST',
+        body: JSON.stringify({ answers, lastQuestionIndex: currentIdx })
+      });
+    } catch (err) {
+      // Still navigate back even if save fails
+      console.error('Save failed:', err);
+    } finally {
+      setSaving(false);
+      onBack();
+    }
+  };
+
+  const handleSubmit = async () => {
+    try {
+      setSubmitting(true);
+      const res = await journeyFetch('/api/learning-journey/placement-test/verify', {
+        method: 'POST',
+        body: JSON.stringify({ answers })
+      });
+      onFinish(res);
+    } catch (err) {
+      alert(err.message || 'Verification failed');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (loading) return <div style={{ textAlign: 'center', padding: '40px' }}><p>{resumed ? 'Resuming your personalized learning journey setup...' : 'Setting up your personalized learning journey...'}</p></div>;
+  if (error) return <div style={{ textAlign: 'center', padding: '40px', color: 'red' }}><p>{error}</p><button onClick={loadQuiz} className="submit-btn" style={{ width: 'auto' }}>Retry</button></div>;
+  if (!quiz || !quiz.questions || quiz.questions.length === 0) return null;
+
+  const currentQ = quiz.questions[currentIdx];
+  const currentAnswerVal = answers[currentQ.id] || '';
+  const answeredCount = Object.keys(answers).filter(k => answers[k] && answers[k].trim() !== '').length;
+
+  const getTopicDisplayName = (topicId) => {
+    if (!topicId) return "";
+    return topicId.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+  };
+
+  const totalQuestions = quiz.questions.length;
+  const pct = ((currentIdx + 1) / totalQuestions) * 100;
+
+  return (
+    <div style={{ padding: '16px', maxWidth: '600px', margin: '0 auto' }}>
+      <div className="header-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+        <button className="back-button" onClick={handleSaveAndQuit} disabled={saving}>
+          {saving ? '💾 Saving...' : `💾 Save & Quit (${answeredCount}/${totalQuestions})`}
+        </button>
+        <span style={{ fontSize: '0.95rem', color: 'orange', fontWeight: 'bold' }}>📝 Personalized Learning Journey Setup</span>
+      </div>
+
+      <div style={{ height: '8px', background: 'var(--clr-border, #444)', borderRadius: '4px', overflow: 'hidden', marginBottom: '20px' }}>
+        <div style={{ width: `${pct}%`, height: '100%', background: 'orange', transition: 'width 0.2s' }} />
+      </div>
+
+      <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+        <span style={{ fontSize: '0.85rem', color: 'var(--clr-text-soft)', textTransform: 'uppercase', fontWeight: 'bold' }}>
+          Question {currentIdx + 1} of {totalQuestions}
+        </span>
+        <div style={{ fontSize: '0.9rem', color: 'var(--clr-accent)', marginTop: '4px', fontWeight: 'bold' }}>
+          Topic: {getTopicDisplayName(currentQ.topicId)}
+        </div>
+        <h2 style={{ marginTop: '12px', minHeight: '60px' }}>{currentQ.prompt}</h2>
+      </div>
+
+      <div style={{ maxWidth: '360px', margin: '0 auto 32px auto' }}>
+        <input
+          type="text"
+          value={currentAnswerVal}
+          onChange={(e) => handleSelectAnswer(e.target.value)}
+          placeholder="Type your answer here..."
+          autoFocus
+          style={{
+            width: '100%',
+            padding: '12px 16px',
+            fontSize: '1.2rem',
+            textAlign: 'center',
+            background: 'var(--clr-surface, #1c1c1f)',
+            border: '1.5px solid var(--clr-border)',
+            borderRadius: '8px',
+            color: 'var(--clr-text)',
+            outline: 'none',
+            fontFamily: 'monospace'
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              if (currentIdx < totalQuestions - 1) setCurrentIdx(currentIdx + 1);
+              else handleSubmit();
+            }
+          }}
+        />
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', maxWidth: '360px', margin: '0 auto' }}>
+        <button
+          onClick={() => setCurrentIdx(prev => Math.max(0, prev - 1))}
+          disabled={currentIdx === 0}
+          className="back-button"
+          style={{ padding: '10px 20px', border: '1px solid var(--clr-border)', borderRadius: '6px', cursor: currentIdx === 0 ? 'not-allowed' : 'pointer' }}
+        >
+          ← Prev
+        </button>
+
+        {currentIdx < totalQuestions - 1 ? (
+          <button
+            onClick={() => setCurrentIdx(prev => prev + 1)}
+            className="submit-btn"
+            style={{ width: 'auto', padding: '10px 24px' }}
+          >
+            Next →
+          </button>
+        ) : (
+          <button
+            onClick={handleSubmit}
+            disabled={submitting}
+            className="submit-btn"
+            style={{ width: 'auto', padding: '10px 24px', background: 'orange', borderColor: 'orange', color: '#000', fontWeight: 'bold' }}
+          >
+            {submitting ? 'Submitting...' : 'Finish Test'}
+          </button>
+        )}
+      </div>
+
+      {answeredCount < totalQuestions && (
+        <div style={{ textAlign: 'center', marginTop: '20px', fontSize: '0.8rem', color: 'var(--clr-text-soft)' }}>
+          {totalQuestions - answeredCount} questions unanswered · Progress auto-saved
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PlacementTestResultsView({ sessionResults, onBack }) {
+  const celebrationRef = useRef(null);
+
+  const hasUnlocks = sessionResults && sessionResults.topicSummary && sessionResults.topicSummary.some(s => s.skippedByTest);
+
+  useEffect(() => {
+    if (!hasUnlocks || !celebrationRef.current) return;
+    const canvas = celebrationRef.current;
+    const ctx = canvas.getContext('2d');
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    const colors = ['#ff6b6b', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#5f27cd', '#01a3a4', '#f368e0', '#ff9f43', '#00d2d3'];
+    const confetti = Array.from({ length: 150 }, () => ({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height - canvas.height,
+      w: Math.random() * 12 + 6,
+      h: Math.random() * 8 + 4,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      vx: (Math.random() - 0.5) * 4,
+      vy: Math.random() * 3 + 2,
+      rot: Math.random() * 360,
+      rotSpeed: (Math.random() - 0.5) * 10
+    }));
+    let frame;
+    const animate = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      let allDone = true;
+      confetti.forEach(c => {
+        c.x += c.vx;
+        c.y += c.vy;
+        c.rot += c.rotSpeed;
+        c.vy += 0.05;
+        if (c.y < canvas.height + 50) allDone = false;
+        ctx.save();
+        ctx.translate(c.x, c.y);
+        ctx.rotate((c.rot * Math.PI) / 180);
+        ctx.fillStyle = c.color;
+        ctx.fillRect(-c.w / 2, -c.h / 2, c.w, c.h);
+        ctx.restore();
+      });
+      if (!allDone) frame = requestAnimationFrame(animate);
+    };
+    animate();
+    return () => { if (frame) cancelAnimationFrame(frame); };
+  }, [sessionResults, hasUnlocks]);
+
+  if (!sessionResults || !sessionResults.topicSummary) return null;
+
+  return (
+    <div style={{ padding: '16px', maxWidth: '600px', margin: '0 auto' }}>
+      {hasUnlocks && (
+        <canvas
+          ref={celebrationRef}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            width: '100vw',
+            height: '100vh',
+            pointerEvents: 'none',
+            zIndex: 9999
+          }}
+        />
+      )}
+      <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+        <span style={{ fontSize: '3rem' }}>🎯</span>
+        <h2 style={{ marginTop: '12px', marginBottom: '8px' }}>Personalized Learning Journey Summary</h2>
+        <p className="subtitle">Here is how you stand across the curriculum topics:</p>
+      </div>
+
+      <div style={{ background: 'var(--clr-surface, #1c1c1f)', border: '1px solid var(--clr-border)', borderRadius: '12px', padding: '8px', marginBottom: '24px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
+        {sessionResults.topicSummary.map((summary, idx) => {
+          const displayName = summary.topicId.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+          
+          let statusText = "";
+          let statusColor = "var(--clr-text-soft)";
+          
+          if (summary.alreadyCompleted) {
+            statusText = "Completed Prior ✓";
+            statusColor = "var(--clr-text-soft)";
+          } else if (summary.skippedByTest) {
+            statusText = "Skipped ✓";
+            statusColor = "var(--clr-correct, #26de81)";
+          } else if (summary.tested) {
+            statusText = `Not skipped (Score: ${summary.scorePercent}%)`;
+            statusColor = "var(--clr-wrong, #ff6b6b)";
+          } else {
+            statusText = "Not tested";
+            statusColor = "var(--clr-text-soft)";
+          }
+
+          return (
+            <div
+              key={summary.topicId}
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: '14px 16px',
+                borderBottom: idx < sessionResults.topicSummary.length - 1 ? '1px solid var(--clr-border)' : 'none',
+              }}
+            >
+              <div>
+                <span style={{ fontSize: '0.8rem', color: 'var(--clr-accent)', fontWeight: 'bold', marginRight: '8px' }}>
+                  Topic {idx + 1}
+                </span>
+                <strong style={{ fontSize: '1rem' }}>{displayName}</strong>
+              </div>
+              
+              <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+                <span style={{ fontSize: '0.9rem', color: statusColor, fontWeight: 'bold' }}>
+                  {statusText}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ textAlign: 'center' }}>
+        <button
+          onClick={onBack}
+          className="submit-btn"
+          style={{ width: 'auto', padding: '12px 32px', background: 'orange', borderColor: 'orange', color: '#000', fontWeight: 'bold' }}
+        >
+          Return to Learning Journey
+        </button>
       </div>
     </div>
   );

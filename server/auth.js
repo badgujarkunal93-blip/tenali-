@@ -155,6 +155,9 @@ async function connectMongo(uri = MONGO_URI) {
 const SEED_USERS = [
   { username: 'sudarshan', password: 'sherlockholmes' },
   { username: 'tatsavit',  password: 'taittiriya' },
+  { username: 'demo1',     password: 'demo123' },
+  { username: 'demo2',     password: 'demo123' },
+  { username: 'democomplete', password: 'demo123' },
 ];
 
 // In-memory fallback used when MongoDB is unavailable.
