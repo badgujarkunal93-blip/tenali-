@@ -88,6 +88,27 @@ function getAnswersForQuestions(questions, limit = 100) {
   return answers;
 }
 
+// 2b. Helper to generate random correct/wrong answers (for demo3 and demo4)
+function getRandomAnswersForQuestions(questions, limit = 90) {
+  const answers = {};
+  for (let idx = 0; idx < Math.min(questions.length, limit); idx++) {
+    const q = questions[idx];
+    const makeCorrect = Math.random() > 0.4; // ~60% correct rate, randomly distributed
+    if (makeCorrect) {
+      answers[q.id] = q.correctAnswer || "1";
+    } else {
+      // Generate a wrong answer
+      const correctVal = q.correctAnswer || "1";
+      if (/^\d+$/.test(correctVal)) {
+        answers[q.id] = String(Number(correctVal) + 5);
+      } else {
+        answers[q.id] = correctVal + "_wrong";
+      }
+    }
+  }
+  return answers;
+}
+
 // 3. Helper to simulate the verifyPlacementTest logic locally for the JSON file
 function simulateVerifyPlacementTest(questions, answers) {
   const completedConcepts = [];
@@ -190,6 +211,40 @@ async function seed() {
       }
     };
 
+    const demo3Answers = getRandomAnswersForQuestions(templateQs, 90);
+    const demo3Progress = {
+      completedConcepts: [],
+      completedTopics: [],
+      conceptsNeedingRevision: [],
+      checkpointAttempts: [],
+      latestCheckpointScore: {},
+      activeCheckpoint: null,
+      activePlacementTest: {
+        topicId: 'combined',
+        questions: templateQs,
+        savedAnswers: demo3Answers,
+        lastQuestionIndex: 90,
+        startedAt: new Date().toISOString()
+      }
+    };
+
+    const demo4Answers = getRandomAnswersForQuestions(templateQs, 90);
+    const demo4Progress = {
+      completedConcepts: [],
+      completedTopics: [],
+      conceptsNeedingRevision: [],
+      checkpointAttempts: [],
+      latestCheckpointScore: {},
+      activeCheckpoint: null,
+      activePlacementTest: {
+        topicId: 'combined',
+        questions: templateQs,
+        savedAnswers: demo4Answers,
+        lastQuestionIndex: 90,
+        startedAt: new Date().toISOString()
+      }
+    };
+
     // democompleteProgress is generated using the verify test simulation
     const democompleteAnswers = getAnswersForQuestions(templateQs, 100);
     const democompleteProgress = simulateVerifyPlacementTest(templateQs, democompleteAnswers);
@@ -209,6 +264,8 @@ async function seed() {
 
     fileProgressDb['demo1'] = { userId: 'demo1', ...demo1Progress };
     fileProgressDb['demo2'] = { userId: 'demo2', ...demo2Progress };
+    fileProgressDb['demo3'] = { userId: 'demo3', ...demo3Progress };
+    fileProgressDb['demo4'] = { userId: 'demo4', ...demo4Progress };
     fileProgressDb['democomplete'] = { userId: 'democomplete', ...democompleteProgress };
 
     fs.writeFileSync(JOURNEY_DB_FILE, JSON.stringify(fileProgressDb, null, 2), 'utf8');
@@ -228,6 +285,8 @@ async function seed() {
       const usersToSeed = [
         { username: 'demo1', progress: demo1Progress },
         { username: 'demo2', progress: demo2Progress },
+        { username: 'demo3', progress: demo3Progress },
+        { username: 'demo4', progress: demo4Progress },
         { username: 'democomplete', progress: democompleteProgress }
       ];
 
@@ -275,7 +334,9 @@ async function seed() {
     console.log(`Credentials for demo:`);
     console.log(`1. Username: demo1       | Password: ${PASSWORD} | State: 100 questions answered (some wrong), ready to submit`);
     console.log(`2. Username: demo2       | Password: ${PASSWORD} | State: 90 questions answered (some wrong), 10 questions remaining`);
-    console.log(`3. Username: democomplete| Password: ${PASSWORD} | State: Partially completed dashboard (Topics 1-3 unlocked, Topic 4 locked)`);
+    console.log(`3. Username: demo3       | Password: ${PASSWORD} | State: 90 questions answered randomly (60% correct), 10 questions remaining`);
+    console.log(`4. Username: demo4       | Password: ${PASSWORD} | State: 90 questions answered randomly (60% correct), 10 questions remaining`);
+    console.log(`5. Username: democomplete| Password: ${PASSWORD} | State: Partially completed dashboard (Topics 1-3 unlocked, Topic 4 locked)`);
     console.log(`==================================================`);
 
   } catch (err) {
