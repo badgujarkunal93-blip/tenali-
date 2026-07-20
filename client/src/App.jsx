@@ -186,7 +186,7 @@ function AuthMenu() {
       await login(username.trim(), password)
       setShowLogin(false); setOpen(false)
       setUsername(''); setPassword('')
-      window.location.href = '/tenth'
+      window.location.reload()
     } catch (err) {
       setError(err.message || 'login failed')
     } finally { setBusy(false) }
@@ -965,7 +965,13 @@ function renderFeedback(feedback, isCorrect) {
 function DifficultySlider({ pct, onChange, maxWidth = 260 }) {
   const barRef = useRef(null)
   const pctToPos = (p) => Math.min(100, Math.max(0, p))
+  
+  // Since adaptive difficulty should move according to performance and not be manually adjusted by the user,
+  // we disable all interaction and make the slider a read-only progress indicator.
+  const isReadOnly = true;
+
   const handleInteraction = (clientX) => {
+    if (isReadOnly) return
     const bar = barRef.current
     if (!bar) return
     const rect = bar.getBoundingClientRect()
@@ -973,6 +979,7 @@ function DifficultySlider({ pct, onChange, maxWidth = 260 }) {
     onChange(newPct)
   }
   const onPointerDown = (e) => {
+    if (isReadOnly) return
     e.preventDefault()
     handleInteraction(e.clientX)
     const onMove = (ev) => handleInteraction(ev.clientX)
@@ -981,7 +988,7 @@ function DifficultySlider({ pct, onChange, maxWidth = 260 }) {
     window.addEventListener('pointerup', onUp)
   }
   return (
-    <div ref={barRef} onPointerDown={onPointerDown} style={{ maxWidth, margin: '0.3rem auto 0.6rem', height: 20, borderRadius: 10, background: 'var(--color-border, #e0e0e0)', position: 'relative', cursor: 'pointer', touchAction: 'none' }}>
+    <div ref={barRef} onPointerDown={isReadOnly ? undefined : onPointerDown} style={{ maxWidth, margin: '0.3rem auto 0.6rem', height: 20, borderRadius: 10, background: 'var(--color-border, #e0e0e0)', position: 'relative', cursor: isReadOnly ? 'default' : 'pointer', touchAction: 'none' }}>
       <div style={{ position: 'absolute', top: 7, left: 0, right: 0, height: 6, borderRadius: 3, background: 'linear-gradient(90deg, #4caf50, #ff9800, #f44336, #9c27b0)' }} />
       <div style={{
         position: 'absolute', top: 1, left: `calc(${pctToPos(pct)}% - 9px)`,
@@ -44094,6 +44101,13 @@ function App() {
     }
 
     if (ActiveApp) {
+      const extraProps = {};
+      if (journeyContext && journeyContext.conceptKey === 'addition') {
+        extraProps.initialStarted = true;
+        extraProps.initialNumQuestions = '20';
+        extraProps.initialIsAdaptive = true;
+      }
+
       const element = (
         <ActiveApp
           completedTopics={completedTopics}
@@ -44128,6 +44142,7 @@ function App() {
             }
           }}
           isGoalMode={isGoalMode}
+          {...extraProps}
         />
       );
       return journeyContext ? <AuthGate>{element}</AuthGate> : element;
@@ -48488,13 +48503,13 @@ function ColumnSubtractionApp({ onBack, initialDifficulty, initialNumQuestions, 
  * @param {Object} props
  * @param {Function} props.onBack - Callback to return to home menu
  */
-function AdditionApp({ onBack, completedTopics = [], goldMastery = [], markTopicCompleted, setTransferTopic, setMode, initialMode, initialDifficulty, initialNumQuestions, initialStarted, isGoalMode = false }) {
+function AdditionApp({ onBack, completedTopics = [], goldMastery = [], markTopicCompleted, setTransferTopic, setMode, initialMode, initialDifficulty, initialNumQuestions, initialStarted, initialIsAdaptive, isGoalMode = false }) {
   // Mode selection: 'standard' (default), 'counting' (Visual Counting), 'scale' (Balance Scale)
   const [additionMode, setAdditionMode] = useState(initialMode || 'standard')
   // Difficulty level: 'easy' (1-digit), 'medium' (2-digit), 'hard' (3-digit), 'extrahard' (4-digit)
   const [difficulty, setDifficulty] = useState(initialDifficulty || 'easy')
   // Adaptive mode enabled?
-  const [isAdaptive, setIsAdaptive] = useState(false)
+  const [isAdaptive, setIsAdaptive] = useState(initialIsAdaptive || false)
   // Adaptive score (0-3)
   const [adaptScore, setAdaptScore] = useState(0)
 
@@ -48543,6 +48558,21 @@ function AdditionApp({ onBack, completedTopics = [], goldMastery = [], markTopic
       }
     }
   }, [finished, score, totalQ, markTopicCompleted])
+
+  useEffect(() => {
+    if (initialStarted) {
+      const count = initialNumQuestions ? Number(initialNumQuestions) : DEFAULT_TOTAL
+      setTotalQ(count)
+      setStarted(true)
+      setFinished(false)
+      setScore(0)
+      setQuestionNumber(1)
+      setResults([])
+      setAdaptScore(0)
+      adaptScoreRef.current = 0
+      fetchQuestion(initialDifficulty || 'easy')
+    }
+  }, [initialStarted])
 
   // Drag & Drop Visual Counting state
   const [sourceItems, setSourceItems] = useState([])
